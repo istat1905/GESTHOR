@@ -394,10 +394,6 @@ if f_stock:
                     )
                     st.plotly_chart(fig_service, use_container_width=True)
                     
-
-[Image of inventory dashboard charts]
-
-                    
                     st.markdown("---")
                 
                 # Affichage détaillé par commande
