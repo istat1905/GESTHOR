@@ -4,10 +4,10 @@ import numpy as np
 import pdfplumber
 import re
 
-# --- Config ---
+# --- Configuration de la page ---
 st.set_page_config(page_title="GESTHOR – Master", page_icon="📦", layout="wide")
 
-# --- CSS ---
+# --- CSS Épuré et Centré ---
 st.markdown("""
     <style>
     .block-container { padding-top: 1rem; }
@@ -20,7 +20,7 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# --- HEADER ---
+# --- HEADER (Logo Centré) ---
 c1, c2, c3 = st.columns([1,1,1])
 with c2:
     try:
@@ -34,25 +34,22 @@ st.markdown("<h4 style='text-align: center; color: grey; font-weight: normal;'>G
 
 @st.cache_data
 def load_stock(file):
+    """ Charge et prépare le fichier Excel de stock """
     try:
         df = pd.read_excel(file)
         col_map = {c: c.strip() for c in df.columns}
         df = df.rename(columns=col_map)
         
-        # Conversion Texte OBLIGATOIRE
         if "N° article." in df.columns:
             df["N° article."] = df["N° article."].astype(str).str.strip()
         if "Description" in df.columns:
             df["Description"] = df["Description"].astype(str).str.strip()
         
-        # Conversion Nombres
         df["Inventory"] = pd.to_numeric(df["Inventory"], errors='coerce').fillna(0)
         df["Qty. per Sales Unit of Measure"] = pd.to_numeric(df["Qty. per Sales Unit of Measure"], errors='coerce').fillna(1)
         
-        # Calcul Colis
         df["Stock Colis"] = df["Inventory"] / df["Qty. per Sales Unit of Measure"].replace(0, 1)
         
-        # Statut
         conditions = [(df["Inventory"] <= 0), (df["Inventory"] < 500)]
         choices = ["Rupture", "Faible"]
         df["Statut"] = np.select(conditions, choices, default="OK")
@@ -63,7 +60,7 @@ def load_stock(file):
         return None
 
 def extract_pdf_force(pdf_file):
-    """ Moteur d'extraction Bulldog, ciblant Ref et Qte malgré le format cassé """
+    """ Moteur d'extraction Bulldog, adapté au format CSV cassé de ce PDF """
     orders = []
     
     try:
@@ -72,45 +69,40 @@ def extract_pdf_force(pdf_file):
             for page in pdf.pages:
                 full_text += page.extract_text() + "\n"
             
-            # 1. Extraction des Numéros de Commande
-            cde_nums = re.findall(r"Commande\s*n°(\d+)", full_text)
-            if not cde_nums: return pd.DataFrame()
+            # 1. Trouver toutes les commandes et leur position dans le texte
+            cmd_matches = list(re.finditer(r"Commande\s*n°(\d+)", full_text))
+            if not cmd_matches: return pd.DataFrame()
             
-            # 2. Extraction des Lignes de Produits (FIX CORRIGÉ)
-            # Pattern: "Ligne\n","REF\n",... *Junk* ..., "QTY\n","PCB\n","EUR\n"
+            cmd_positions = {m.start(): m.group(1) for m in cmd_matches}
+            cmd_starts = sorted(cmd_positions.keys()) 
+            
+            # 2. Pattern pour les lignes de produit (très robuste)
+            # Cible la Réf. frn (Group 1) et la Qté commandée (Group 2)
             item_pattern = re.compile(
-                # Commence par le Numéro de Ligne et capture la Réf (Group 1)
-                r'"\d+\n","(\d{4,7})\n"' 
-                # Non-greedy match pour tout ce qui est entre la Réf et la Qté
-                r'.*?' 
-                # Capture la Qté (Group 2), suivie de PCB et EUR pour s'ancrer
-                r',"(\d+)\n","\d+\n","EUR\n"', 
-                re.DOTALL # Permet au point (.) de matcher les sauts de ligne (\n)
+                r'"\d+\n",'                      # Commence par le Numéro de Ligne
+                r'"(\d{4,7})\n",'               # Réf. frn (Group 1)
+                r'.*?'                          # Non-greedy match pour tout le désordre intermédiaire
+                r'"(\d+)\n",'                   # Qté commandée (Group 2)
+                r'"\d+\n","EUR\n"',             # Ancrage final (Pcb et Devise)
+                re.DOTALL | re.IGNORECASE       # Essentiel pour matcher les sauts de ligne (\n)
             )
             
-            item_matches = item_pattern.finditer(full_text)
-            
-            # 3. Attribution des lignes de commande aux numéros
-            current_cde_index = 0
-            
-            for match in item_matches:
-                ref = match.group(1).strip()
-                qty = match.group(2).strip()
+            # 3. Traiter chaque ligne de produit et l'associer à la commande
+            for item_match in item_pattern.finditer(full_text):
+                item_pos = item_match.start()
+                ref = item_match.group(1).strip()
+                qty = item_match.group(2).strip()
                 
-                # Bascule sur la commande suivante si on a passé le "Récapitulatif" de la commande actuelle
-                if current_cde_index < len(cde_nums) - 1 and "Récapitulatif" in full_text[:match.start()]:
-                     # On trouve le numéro de commande associé à ce Récapitulatif
-                     # Ici on simplifie en basculant à la prochaine commande disponible
-                     if current_cde_index < len(cde_nums) - 1 and ref == cde_nums[current_cde_index+1]:
-                         # Petite astuce pour éviter le crash
-                         pass
-                     else:
-                        current_cde_index += 1
-                
-                cde_id = cde_nums[min(current_cde_index, len(cde_nums) - 1)]
-
+                # Déterminer la commande associée (la dernière Commande n° vue avant cette ligne)
+                current_cde = cmd_positions[cmd_starts[0]]
+                for start in cmd_starts:
+                    if start <= item_pos:
+                        current_cde = cmd_positions[start]
+                    else:
+                        break # Prochaine commande est après la ligne
+                        
                 orders.append({
-                    "Commande": cde_id,
+                    "Commande": current_cde,
                     "Ref": ref,
                     "Qte_Cde": int(qty)
                 })
@@ -149,7 +141,7 @@ if f_stock:
     k1.metric("Articles trouvés", len(df))
     nb_rupt = len(df[df["Statut"] == "Rupture"])
     nb_faible = len(df[df["Statut"] == "Faible"])
-    k2.metric("❌ En Rupture", nb_rupt, delta=-nb_rupt, delta_color="inverse")
+    k2.metric("❌ En Rupture", nb_rupt, delta=0 if nb_rupt == 0 else -nb_rupt, delta_color="inverse")
     k3.metric("⚠️ Stock Faible", nb_faible, delta_color="normal")
     
     st.divider()
@@ -163,12 +155,12 @@ if f_stock:
     
     # --- 1. LOGIQUE ANALYSE COMMANDES (Si PDF) ---
     if f_pdf:
-        with tabs[0]:
+        with tabs[t_noms.index("🚀 Analyse Commandes")]:
             st.subheader("Résultat de l'analyse des Commandes")
             df_cde = extract_pdf_force(f_pdf)
             
             if df_cde.empty or 'Ref' not in df_cde.columns or len(df_cde) < 1:
-                st.warning("⚠️ Aucune ligne de commande exploitable trouvée dans le PDF. Le format reste problématique.")
+                st.warning("⚠️ Aucune ligne de commande exploitable trouvée dans le PDF. Le format est trop fragmenté. Veuillez vérifier que le fichier est bien un PDF texte et non une image.")
             else:
                 # Moteur de calcul (Simule l'épuisement du stock)
                 stock_live = df_stock.set_index("N° article.")["Inventory"].to_dict()
@@ -187,7 +179,7 @@ if f_stock:
                         tot_demande += qte
                         servi = min(qte, stock_dispo)
                         tot_servi += servi
-                        stock_live[ref] = max(0, stock_dispo - qte)
+                        stock_live[ref] = max(0, stock_dispo - qte) # Déduction immédiate
                         
                         if servi < qte:
                             manque = qte - servi
@@ -229,7 +221,6 @@ if f_stock:
     # --- 2. LOGIQUE ONGLETS STOCK ---
     
     def show_tab(filtre, titre_onglet):
-        # On trouve l'index de l'onglet dans la liste t_noms
         if titre_onglet not in t_noms: return 
         idx = t_noms.index(titre_onglet)
         
