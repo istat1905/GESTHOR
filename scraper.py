@@ -1,60 +1,34 @@
-from selenium import webdriver
-from selenium.webdriver.chrome.service import Service
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-from webdriver_manager.chrome import ChromeDriverManager
+from playwright.sync_api import sync_playwright
 import time
 
 def get_stock(item_code, username, password):
 
-    options = webdriver.ChromeOptions()
-    options.add_argument("--headless=new")
-    options.add_argument("--disable-gpu")
-    options.add_argument("--no-sandbox")
-    options.add_argument("--disable-dev-shm-usage")
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        context = browser.new_context()
+        page = context.new_page()
 
-    driver = webdriver.Chrome(
-        service=Service(ChromeDriverManager().install()),
-        options=options
-    )
+        page.goto("https://bc.suntat.group/Kardesler/?company=BAK%20Kardesler&dc=0")
 
-    driver.get("https://bc.suntat.group/Kardesler/?company=BAK%20Kardesler&dc=0")
+        # LOGIN
+        page.wait_for_selector("#signInName")
+        page.fill("#signInName", username)
+        page.fill("#password", password)
+        page.click("#next")
 
-    # LOGIN
-    WebDriverWait(driver, 20).until(
-        EC.presence_of_element_located((By.ID, "signInName"))
-    ).send_keys(username)
+        page.wait_for_timeout(5000)
 
-    driver.find_element(By.ID, "password").send_keys(password)
-    driver.find_element(By.ID, "next").click()
+        # ARTICLES
+        page.click("xpath=//span[text()='Articles']")
 
-    time.sleep(6)
+        page.wait_for_selector("input[aria-label='Rechercher']")
+        page.fill("input[aria-label='Rechercher']", item_code)
 
-    # MENU → Articles
-    articles_btn = WebDriverWait(driver, 20).until(
-        EC.element_to_be_clickable((By.XPATH, "//span[text()='Articles']"))
-    )
-    articles_btn.click()
+        page.wait_for_timeout(2000)
 
-    # Recherche
-    search_box = WebDriverWait(driver, 20).until(
-        EC.presence_of_element_located((By.XPATH, "//input[@aria-label='Rechercher']"))
-    )
-    search_box.clear()
-    search_box.send_keys(item_code)
+        # STOCK
+        cell = page.locator("//div[@role='row' and @aria-rowindex='2']//div[@col-id='Inventory']")
+        stock = cell.inner_text()
 
-    time.sleep(2)
-
-    # Colonne Inventory
-    inventory_cell = WebDriverWait(driver, 20).until(
-        EC.presence_of_element_located((
-            By.XPATH,
-            "//div[@role='row' and @aria-rowindex='2']//div[@col-id='Inventory']"
-        ))
-    )
-
-    stock = inventory_cell.text.strip()
-
-    driver.quit()
-    return stock
+        browser.close()
+        return stock
