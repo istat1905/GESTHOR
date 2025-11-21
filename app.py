@@ -1,5 +1,11 @@
 import streamlit as st
 from scraper import get_stock
+import subprocess
+import os
+
+# Installer Playwright si non présent
+if not os.path.exists(os.path.expanduser("~/.cache/ms-playwright")):
+    subprocess.run(["playwright", "install"], check=True)
 
 st.title("GESTHOR – Vérification Stock")
 
