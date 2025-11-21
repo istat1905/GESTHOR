@@ -13,7 +13,7 @@ uploaded_file = st.file_uploader("Choisir un fichier Excel", type=["xlsx"])
 if uploaded_file is not None:
     try:
         df = pd.read_excel(uploaded_file)
-        st.session_state.df = df  # On garde le fichier en mémoire
+        st.session_state.df = df  # Garde le fichier en mémoire
         st.success("Fichier chargé avec succès !")
     except Exception as e:
         st.error(f"Erreur lors de la lecture du fichier Excel : {e}")
@@ -28,7 +28,7 @@ if st.session_state.df is not None:
         st.experimental_rerun()
 
     # --- Vérification des colonnes nécessaires ---
-    required_cols = ["Inventory", "Qty. per Sales Unit of Measure"]
+    required_cols = ["Inventory", "Qty. per Sales Unit of Measure", "N° article."]
     missing_cols = [col for col in required_cols if col not in st.session_state.df.columns]
     
     if missing_cols:
@@ -40,14 +40,12 @@ if st.session_state.df is not None:
 
         # --- Recherche article ---
         st.subheader("Rechercher un article")
-        search_col_candidates = [col for col in df.columns if "code" in col.lower() or "no" in col.lower()]
-        search_col = search_col_candidates[0] if search_col_candidates else None
-
-        search_input = st.text_input("Code article à rechercher")
-        if search_input and search_col:
-            df_filtered = df[df[search_col].astype(str).str.contains(search_input)]
+        search_input = st.text_input("Code article à rechercher (N° article.)")
+        if search_input:
+            df_filtered = df[df["N° article."].astype(str).str.strip().str.contains(search_input.strip(), case=False)]
         else:
             df_filtered = df
 
         st.subheader("Stock calculé en colis")
-        st.dataframe(df_filtered)
+        st.dataframe(df_filtered[["N° article.", "Description", "Inventory", 
+                                  "Qty. per Sales Unit of Measure", "Stock en colis"]])
