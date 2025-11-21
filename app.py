@@ -138,6 +138,9 @@ def load_stock(file):
 
 def associate_to_order(item_pos, cmd_positions, cmd_starts):
     """ Associe la position de l'article à la commande la plus proche """
+    if not cmd_starts:
+        return "INCONNU"
+        
     current_cde = cmd_positions[cmd_starts[0]]
     for start in cmd_starts:
         if start <= item_pos:
@@ -147,7 +150,7 @@ def associate_to_order(item_pos, cmd_positions, cmd_starts):
     return current_cde
 
 def extract_pdf_force(pdf_file):
-    """ Moteur d'extraction triple mode pour PDF (Tabulaire Multi-ligne, Fallback 2, Ultra-Fallback 3) """
+    """ Moteur d'extraction quadruple mode pour PDF """
     orders = []
     
     try:
@@ -160,21 +163,59 @@ def extract_pdf_force(pdf_file):
             # 1. Trouver toutes les commandes et leur position
             cmd_matches = list(re.finditer(r"Commande\s*n[°º]?\s*[:\s-]*?(\d{5,10})", full_text))
             if not cmd_matches: 
+                st.warning("❌ Aucune référence de commande trouvée dans le PDF.")
                 return pd.DataFrame()
             
             cmd_positions = {m.start(): m.group(1) for m in cmd_matches}
             cmd_starts = sorted(cmd_positions.keys())
             
-            # --- TENTATIVE 1: MODE TABULAIRE MULTI-LIGNE (v3.2 - Basé sur la structure du brut) ---
-            # Ancrage: Réf. frn (G1), EAN (G2), suivi d'une description multi-ligne, puis Qté (G3), Pcb, Prix.
+            # --- NOUVELLE TENTATIVE 4: MODE TABULAIRE SANS PRIX (Format B) ---
+            # Ancrage: L (G1), Réf. frn (G2), EAN (G3), Nb carton (G4), Description, Qté (G5), Pcb (G6), Devise.
+            pattern_mode4_str = (
+                r'"(\d{1,3})\n"'            # Group 1: L (N° de ligne)
+                r',"[^"]*(\d{4,7})\n"'      # Group 2: Réf. frn (4 à 7 chiffres)
+                r',"[^"]*(\d{13})\n"'       # Group 3: Code EAN (13 chiffres)
+                r',"[^"]*(\d+)\n"'          # Group 4: Nb carton
+                r',"[^"]*?"'                # Libellé fournisseur (non capturé)
+                r',"[^"]*(\d{1,5})\n"'      # Group 5: Qté commandée (Ancre forte)
+                r',"[^"]*\d+\n"'            # Pcb (non capturé)
+                r',"[^"]*EUR\n"'            # Devise (Ancrage de fin)
+            )
+            item_pattern_mode4 = re.compile(
+                pattern_mode4_str,
+                re.DOTALL | re.IGNORECASE
+            )
+            
+            orders_mode4 = []
+            for item_match in item_pattern_mode4.finditer(full_text):
+                item_pos = item_match.start()
+                ref = item_match.group(2).strip() # Réf. frn
+                qty = item_match.group(5).strip() # Qté commandée
+                
+                current_cde = associate_to_order(item_pos, cmd_positions, cmd_starts)
+                        
+                orders_mode4.append({
+                    "Commande": current_cde,
+                    "Ref": ref,
+                    "Qte_Cde": int(qty)
+                })
+
+            if orders_mode4:
+                st.info(f"✅ Extraction réussie (Mode 4 - Format B: {len(orders_mode4)} lignes trouvées).")
+                return pd.DataFrame(orders_mode4).drop_duplicates()
+
+
+            # --- TENTATIVE 1: MODE TABULAIRE MULTI-LIGNE (Format A - Version corrigée) ---
+            # Ancrage: Réf. frn (G1), EAN (G2), Libellé (non capturé), Qté (G3), Pcb, Prix.
             pattern_mode1_str = (
-                r'\n\s*\d{1,3}\s+'          # Ligne N° (ex: \n 1 )
-                r'(\d{4,7})\s+'             # Group 1: Réf. frn (4 à 7 chiffres)
+                r'\n\s*(\d{4,7})\s+'        # Group 1: Réf. frn (4 à 7 chiffres - Ancrage fort)
+                r'\n\s*\d{1,3}\n\s*'        # N° de ligne (séparé dans le brut)
                 r'(\d{13})\s+'              # Group 2: Code EAN (13 chiffres - Ancrage fort)
-                r'(?:.|\n)*?'               # Libellé fournisseur multi-ligne (match non gourmand jusqu'à la Qté)
-                r'\n\s*(\d{1,5})\s+'        # Group 3: Qté commandée (sur une nouvelle ligne)
-                r'\d{1,5}\s+'               # Pcb
-                r'\d{1,5}[,]\d{1,3}'        # Prix unitaire (e.g., 1,52)
+                r'(?:.|\n)*?'               # Libellé fournisseur et Conditionnement multi-lignes (non gourmand)
+                r'([\d]+)\s*'               # Group 3: Qté commandée (1 à 5 chiffres)
+                r',,'                       # Séparateur double virgule (spécifique au Format A)
+                r'(?:.|\n)*?'               # Pcb/Prix (non capturé)
+                r'\d{1,5}[,]\d{1,3}'        # Prix unitaire (e.g., 1,52) - Ancrage de fin
             )
             item_pattern_mode1 = re.compile(
                 pattern_mode1_str,
@@ -184,7 +225,7 @@ def extract_pdf_force(pdf_file):
             for item_match in item_pattern_mode1.finditer(full_text):
                 item_pos = item_match.start()
                 ref = item_match.group(1).strip()
-                qty = item_match.group(3).strip() # CHANGEMENT: La quantité est maintenant le 3e groupe
+                qty = item_match.group(3).strip() # CHANGEMENT: La quantité est le 3e groupe
                 
                 current_cde = associate_to_order(item_pos, cmd_positions, cmd_starts)
                         
@@ -195,11 +236,10 @@ def extract_pdf_force(pdf_file):
                 })
 
             if orders:
-                st.info(f"✅ Extraction réussie (Mode 1 - Tabulaire Multi-ligne stable: {len(orders)} lignes trouvées).")
+                st.info(f"✅ Extraction réussie (Mode 1 - Format A: {len(orders)} lignes trouvées).")
                 return pd.DataFrame(orders).drop_duplicates()
 
             # --- TENTATIVE 2: MODE FALLBACK (Ancrage sur Prix/Pcb - Simplifié) ---
-            # Utilisé si le Mode 1 strict échoue (ex: EAN manquant ou format différent)
             pattern_mode2_str = (
                 r'\n\s*\d+\s+'          # Début d'une ligne d'article (ex: "\n 1 ")
                 r'(\d{4,7})\s+'         # Group 1: Réf. frn (e.g., 118500)
