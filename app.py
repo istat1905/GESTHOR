@@ -165,14 +165,15 @@ def extract_pdf_force(pdf_file):
             cmd_positions = {m.start(): m.group(1) for m in cmd_matches}
             cmd_starts = sorted(cmd_positions.keys())
             
-            # --- TENTATIVE 1: MODE CSV QUOTÉ (Syntaxe et logique de champ corrigées) ---
-            # Le pattern est désormais défini comme une seule chaîne pour éviter l'erreur de "trop d'arguments".
+            # --- TENTATIVE 1: MODE CSV QUOTÉ (v3.1 - Ancrage EAN-13 et décompte strict des champs) ---
+            # Objectif: Réf. frn (G1) -> EAN-13 -> Nb carton -> Libellé -> Qté commandée (G2)
             pattern_mode1_str = (
                 r'"\d+\n",'                          # 1. Ligne N°
                 r'"(\d{4,7})\n",'                    # 2. Réf. frn (Group 1)
-                r'(".*?\n",){3}'                     # 3, 4, 5 (EAN, Nb carton, Libellé) - On compte exactement trois champs quotés intermédiaires pour isoler la Qté
+                r'"\d{13}\n",'                       # 3. Code EAN (EXPLICITELY 13 digits)
+                r'(?:".*?\n",){2}'                   # 4 & 5. DEUX champs quotés restants (Nb carton + Libellé)
                 r'"(\d+)\n"'                         # 6. Qté commandée (Group 2)
-                r'(,".*?"){2}'                       # 7 & 8 (Pcb et Devise - ou autres champs restants)
+                r'(?:,".*?"){2}'                     # 7 & 8 (Pcb et Devise)
             )
             item_pattern_mode1 = re.compile(
                 pattern_mode1_str,
@@ -193,10 +194,10 @@ def extract_pdf_force(pdf_file):
                 })
 
             if orders:
-                st.info(f"✅ Extraction réussie (Mode 1 - Corrigé: {len(orders)} lignes trouvées).")
+                st.info(f"✅ Extraction réussie (Mode 1 - Ancrage EAN-13: {len(orders)} lignes trouvées).")
                 return pd.DataFrame(orders).drop_duplicates()
 
-            # --- TENTATIVE 2: MODE TABLEAU FRAGMENTÉ (Syntaxe vérifiée) ---
+            # --- TENTATIVE 2: MODE TABLEAU FRAGMENTÉ (Fallback standard) ---
             pattern_mode2_str = (
                 r'\n\s*\d+\s+'          # Début d'une ligne d'article (ex: "\n 1 ")
                 r'(\d{4,7})\s+'         # Group 1: Réf. frn (e.g., 118500)
@@ -228,7 +229,7 @@ def extract_pdf_force(pdf_file):
                 st.info(f"✅ Extraction réussie (Mode 2: {len(orders_mode2)} lignes trouvées).")
                 return pd.DataFrame(orders_mode2).drop_duplicates()
 
-            # --- TENTATIVE 3: MODE ULTRA-FALLBACK (Syntaxe vérifiée) ---
+            # --- TENTATIVE 3: MODE ULTRA-FALLBACK (Ancrage minimal) ---
             pattern_mode3_str = (
                 r'\n\s*\d{1,3}\s+'          # Ligne N° (1 à 3 chiffres)
                 r'(\d{4,7})\s+'             # Group 1: Réf. frn (4 à 7 chiffres) suivi d'un espace
@@ -464,7 +465,7 @@ if f_stock:
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                 filename = f"Rapport_Rupture_GESTHOR_{timestamp}.xlsx"
 
-                # LIGNE CRITIQUE (ligne 466): VEUILLEZ VÉRIFIER QUE C'EST BIEN openpyxl
+                # VEUILLEZ VÉRIFIER QUE LE MOTEUR 'openpyxl' EST UTILISÉ
                 with pd.ExcelWriter(output, engine="openpyxl") as writer: 
                     
                     # Feuille 1: Récapitulatif
