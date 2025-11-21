@@ -154,10 +154,10 @@ def extract_pdf_force(pdf_file):
         with pdfplumber.open(pdf_file) as pdf:
             full_text = ""
             for page in pdf.pages:
-                # Ajout d'une ligne de séparation forte entre les pages pour éviter le mélange des données de bas/haut de page
+                # Ajout d'une ligne de séparation forte entre les pages
                 full_text += page.extract_text() + "\n---PAGE BREAK---\n"
             
-            # 1. Trouver toutes les commandes et leur position dans le texte
+            # 1. Trouver toutes les commandes et leur position
             cmd_matches = list(re.finditer(r"Commande\s*n[°º]?\s*[:\s-]*?(\d{5,10})", full_text))
             if not cmd_matches: 
                 return pd.DataFrame()
@@ -165,13 +165,17 @@ def extract_pdf_force(pdf_file):
             cmd_positions = {m.start(): m.group(1) for m in cmd_matches}
             cmd_starts = sorted(cmd_positions.keys())
             
-            # --- TENTATIVE 1: MODE CSV QUOTÉ (Très structuré, désormais strict sur le compte des champs) ---
-            item_pattern_mode1 = re.compile(
+            # --- TENTATIVE 1: MODE CSV QUOTÉ (Syntaxe et logique de champ corrigées) ---
+            # Le pattern est désormais défini comme une seule chaîne pour éviter l'erreur de "trop d'arguments".
+            pattern_mode1_str = (
                 r'"\d+\n",'                          # 1. Ligne N°
                 r'"(\d{4,7})\n",'                    # 2. Réf. frn (Group 1)
-                r'(".*?\n",){3}'                     # 3, 4, 5 (EAN, Nb carton, Libellé) - EXACTEMENT trois champs quotés intermédiaires
-                r'"(\d+)\n"',                        # 6. Qté commandée (Group 2)
-                r'(,".*?"){2}',                      # 7 & 8 (Pcb et Devise - ou autres champs restants)
+                r'(".*?\n",){3}'                     # 3, 4, 5 (EAN, Nb carton, Libellé) - On compte exactement trois champs quotés intermédiaires pour isoler la Qté
+                r'"(\d+)\n"'                         # 6. Qté commandée (Group 2)
+                r'(,".*?"){2}'                       # 7 & 8 (Pcb et Devise - ou autres champs restants)
+            )
+            item_pattern_mode1 = re.compile(
+                pattern_mode1_str,
                 re.DOTALL | re.IGNORECASE
             )
             
@@ -192,17 +196,20 @@ def extract_pdf_force(pdf_file):
                 st.info(f"✅ Extraction réussie (Mode 1 - Corrigé: {len(orders)} lignes trouvées).")
                 return pd.DataFrame(orders).drop_duplicates()
 
-            # --- TENTATIVE 2: MODE TABLEAU FRAGMENTÉ (Ancrage sur Prix/Pcb) ---
-            item_pattern_mode2 = re.compile(
+            # --- TENTATIVE 2: MODE TABLEAU FRAGMENTÉ (Syntaxe vérifiée) ---
+            pattern_mode2_str = (
                 r'\n\s*\d+\s+'          # Début d'une ligne d'article (ex: "\n 1 ")
                 r'(\d{4,7})\s+'         # Group 1: Réf. frn (e.g., 118500)
                 r'.*?'                  # Match non gourmand pour Description/Cond.
                 r'(\d+)\s+'             # Group 2: Qté commandée
                 r'\d+\s+'               # Pcb
                 r'\d+,\d+'              # Prix (ancrage)
-                , re.DOTALL 
             )
-
+            item_pattern_mode2 = re.compile(
+                pattern_mode2_str, 
+                re.DOTALL
+            )
+            
             orders_mode2 = []
             for item_match in item_pattern_mode2.finditer(full_text):
                 item_pos = item_match.start()
@@ -221,13 +228,16 @@ def extract_pdf_force(pdf_file):
                 st.info(f"✅ Extraction réussie (Mode 2: {len(orders_mode2)} lignes trouvées).")
                 return pd.DataFrame(orders_mode2).drop_duplicates()
 
-            # --- TENTATIVE 3: MODE ULTRA-FALLBACK (Ancrage minimal, pour les formats complexes/fusionnés) ---
-            item_pattern_mode3 = re.compile(
+            # --- TENTATIVE 3: MODE ULTRA-FALLBACK (Syntaxe vérifiée) ---
+            pattern_mode3_str = (
                 r'\n\s*\d{1,3}\s+'          # Ligne N° (1 à 3 chiffres)
                 r'(\d{4,7})\s+'             # Group 1: Réf. frn (4 à 7 chiffres) suivi d'un espace
                 r'.{1,250}?'                # Description/Autres champs (1 à 250 caractères max)
                 r'(\d{1,5})\s*[\n\r]'       # Group 2: Qté commandée (1 à 5 chiffres) avant un retour à la ligne
-                , re.DOTALL
+            )
+            item_pattern_mode3 = re.compile(
+                pattern_mode3_str, 
+                re.DOTALL
             )
             
             orders_mode3 = []
@@ -454,7 +464,7 @@ if f_stock:
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                 filename = f"Rapport_Rupture_GESTHOR_{timestamp}.xlsx"
 
-                # LIGNE CRITIQUE (ligne 458): VEUILLEZ VÉRIFIER QUE C'EST BIEN openpyxl
+                # LIGNE CRITIQUE (ligne 466): VEUILLEZ VÉRIFIER QUE C'EST BIEN openpyxl
                 with pd.ExcelWriter(output, engine="openpyxl") as writer: 
                     
                     # Feuille 1: Récapitulatif
