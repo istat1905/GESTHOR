@@ -165,14 +165,15 @@ def extract_pdf_force(pdf_file):
             cmd_positions = {m.start(): m.group(1) for m in cmd_matches}
             cmd_starts = sorted(cmd_positions.keys())
             
-            # --- TENTATIVE 1: MODE TABULAIRE MULTI-LIGNE (v3.2 - Basé sur la structure du brut) ---
-            # Ancrage: Réf. frn (G1), EAN (G2), suivi d'une description multi-ligne, puis Qté (G3), Pcb, Prix.
+            # --- TENTATIVE 1: MODE TABULAIRE MULTI-LIGNE (v3.3 - Basé sur la structure du brut) ---
+            # Ancrage: Réf. frn (G1), EAN (G2), Libellé (non capturé), Qté (G3), Pcb, Prix.
             pattern_mode1_str = (
                 r'\n\s*\d{1,3}\s+'          # Ligne N° (ex: \n 1 )
                 r'(\d{4,7})\s+'             # Group 1: Réf. frn (4 à 7 chiffres)
                 r'(\d{13})\s+'              # Group 2: Code EAN (13 chiffres - Ancrage fort)
-                r'(?:.|\n)*?'               # Libellé fournisseur multi-ligne (match non gourmand jusqu'à la Qté)
-                r'\n\s*(\d{1,5})\s+'        # Group 3: Qté commandée (sur une nouvelle ligne)
+                r'(?:.|\n)*?'               # Libellé fournisseur et Conditionnement multi-lignes (non gourmand)
+                r'[\s\r\n]+'                # Un ou plusieurs espaces/retours à la ligne pour marquer le saut
+                r'(\d{1,5})\s+'             # Group 3: Qté commandée (le premier nombre trouvé après le saut)
                 r'\d{1,5}\s+'               # Pcb
                 r'\d{1,5}[,]\d{1,3}'        # Prix unitaire (e.g., 1,52)
             )
@@ -184,7 +185,7 @@ def extract_pdf_force(pdf_file):
             for item_match in item_pattern_mode1.finditer(full_text):
                 item_pos = item_match.start()
                 ref = item_match.group(1).strip()
-                qty = item_match.group(3).strip() # CHANGEMENT: La quantité est maintenant le 3e groupe
+                qty = item_match.group(3).strip() # CHANGEMENT: La quantité est le 3e groupe
                 
                 current_cde = associate_to_order(item_pos, cmd_positions, cmd_starts)
                         
@@ -199,7 +200,6 @@ def extract_pdf_force(pdf_file):
                 return pd.DataFrame(orders).drop_duplicates()
 
             # --- TENTATIVE 2: MODE FALLBACK (Ancrage sur Prix/Pcb - Simplifié) ---
-            # Utilisé si le Mode 1 strict échoue (ex: EAN manquant ou format différent)
             pattern_mode2_str = (
                 r'\n\s*\d+\s+'          # Début d'une ligne d'article (ex: "\n 1 ")
                 r'(\d{4,7})\s+'         # Group 1: Réf. frn (e.g., 118500)
