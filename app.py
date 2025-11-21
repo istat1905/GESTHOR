@@ -3,170 +3,249 @@ import pandas as pd
 import numpy as np
 import pdfplumber
 import re
-import io
-from datetime import datetime
 
-# --- Configuration page ---
+# --- Configuration de la page ---
 st.set_page_config(page_title="GESTHOR – Master", page_icon="📦", layout="wide")
 
-# --- Base de données utilisateurs (simulation) ---
-USERS_DB = {
-    "admin": {"password": "admin123", "role": "admin"},
-    "user1": {"password": "user123", "role": "user"},
-}
+# --- CSS Épuré et Centré ---
+st.markdown("""
+    <style>
+    .block-container { padding-top: 1rem; }
+    /* Style KPI */
+    div[data-testid="stMetric"] {
+        background-color: #fff; border: 1px solid #ddd; border-radius: 8px;
+        padding: 10px; text-align: center; box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+    }
+    .footer { text-align: center; margin-top: 4rem; color: #888; font-size: 0.8rem; border-top: 1px solid #eee; padding-top: 1rem;}
+    </style>
+    """, unsafe_allow_html=True)
 
-def check_password(username, password):
-    if username in USERS_DB and USERS_DB[username]["password"] == password:
-        return True, USERS_DB[username]["role"]
-    return False, None
+# --- HEADER (Logo Centré) ---
+c1, c2, c3 = st.columns([1,1,1])
+with c2:
+    try:
+        st.image("Gesthor.png", use_container_width=True)
+    except:
+        st.markdown("<h1 style='text-align: center; color: #0072B5;'>GESTHOR</h1>", unsafe_allow_html=True)
 
-# --- Session state pour authentification ---
-if "authenticated" not in st.session_state:
-    st.session_state.authenticated = False
-if "username" not in st.session_state:
-    st.session_state.username = None
-if "user_role" not in st.session_state:
-    st.session_state.user_role = None
+st.markdown("<h4 style='text-align: center; color: grey; font-weight: normal;'>Gestion de Stock & Analyse de Commandes</h4>", unsafe_allow_html=True)
 
-# --- Connexion ---
-if not st.session_state.authenticated:
-    st.markdown("### 🔐 Connexion requise")
-    with st.form("login_form"):
-        username = st.text_input("👤 Identifiant")
-        password = st.text_input("🔒 Mot de passe", type="password")
-        submit = st.form_submit_button("Se connecter")
-        if submit:
-            valid, role = check_password(username, password)
-            if valid:
-                st.session_state.authenticated = True
-                st.session_state.username = username
-                st.session_state.user_role = role
-                st.success(f"✅ Bienvenue {username} !")
-                st.experimental_rerun()
-            else:
-                st.error("❌ Identifiant ou mot de passe incorrect")
-    st.stop()
+# --- FONCTIONS ---
 
-# --- Sidebar ---
-st.sidebar.header(f"👋 {st.session_state.username} ({st.session_state.user_role})")
-if st.sidebar.button("🚪 Déconnexion"):
-    st.session_state.authenticated = False
-    st.session_state.username = None
-    st.session_state.user_role = None
-    st.experimental_rerun()
-
-st.sidebar.header("📂 Uploads")
-f_stock = st.sidebar.file_uploader("Stock Excel", type=["xlsx"])
-f_pdf = st.sidebar.file_uploader("Commandes PDF", type=["pdf"])
-
-search_input = st.sidebar.text_input("🔍 Recherche article", placeholder="Code ou libellé...")
-
-# --- Fonctions ---
 @st.cache_data
 def load_stock(file):
-    df = pd.read_excel(file)
-    df.columns = [c.strip() for c in df.columns]
-    df["N° article."] = df["N° article."].astype(str).str.strip()
-    df["Inventory"] = pd.to_numeric(df["Inventory"], errors="coerce").fillna(0)
-    df["Qty. per Sales Unit of Measure"] = pd.to_numeric(df["Qty. per Sales Unit of Measure"], errors="coerce").fillna(1)
-    df["Stock Colis"] = df["Inventory"] / df["Qty. per Sales Unit of Measure"].replace(0,1)
-    conditions = [(df["Inventory"] <= 0), (df["Inventory"] < 500)]
-    choices = ["Rupture", "Faible"]
-    df["Statut"] = np.select(conditions, choices, default="OK")
-    return df
+    """ Charge et prépare le fichier Excel de stock """
+    try:
+        df = pd.read_excel(file)
+        col_map = {c: c.strip() for c in df.columns}
+        df = df.rename(columns=col_map)
+        
+        if "N° article." in df.columns:
+            df["N° article."] = df["N° article."].astype(str).str.strip()
+        if "Description" in df.columns:
+            df["Description"] = df["Description"].astype(str).str.strip()
+        
+        df["Inventory"] = pd.to_numeric(df["Inventory"], errors='coerce').fillna(0)
+        df["Qty. per Sales Unit of Measure"] = pd.to_numeric(df["Qty. per Sales Unit of Measure"], errors='coerce').fillna(1)
+        
+        df["Stock Colis"] = df["Inventory"] / df["Qty. per Sales Unit of Measure"].replace(0, 1)
+        
+        conditions = [(df["Inventory"] <= 0), (df["Inventory"] < 500)]
+        choices = ["Rupture", "Faible"]
+        df["Statut"] = np.select(conditions, choices, default="OK")
+        
+        return df
+    except Exception as e:
+        st.error(f"Erreur Excel : {e}")
+        return None
 
 def extract_pdf_force(pdf_file):
+    """ Extraction Auchan fiable (format texte standard) """
+    import pdfplumber
+    import re
     orders = []
+
+    # Regex Auchan
+    regex_cde = re.compile(r"Commande\s*n[°º]\s*0*(\d+)")
+    regex_ligne = re.compile(
+        r"^\s*\d+\s+(\d{3,6})\s+\d{10,13}\s+(\d+)\s+[A-ZÉÈÀÂÊÎÔÛÇ0-9'\- ,\/]+?\s+(\d+)\s+\d+\s+EUR$"
+    )
+
     try:
         with pdfplumber.open(pdf_file) as pdf:
-            text = "\n".join([p.extract_text() for p in pdf.pages if p.extract_text()])
-        # Trouver toutes les commandes
-        cmd_matches = list(re.finditer(r"Commande\s*n[°º]?\s*[:\s-]*?(\d{5,10})", text))
-        if not cmd_matches: return pd.DataFrame()
-        cmd_positions = {m.start(): m.group(1) for m in cmd_matches}
-        cmd_starts = sorted(cmd_positions.keys())
+            current_cde = None
+            for page in pdf.pages:
+                text = page.extract_text()
+                if not text:
+                    continue
 
-        # Pattern ligne produit
-        item_pattern = re.compile(r'"\d+\n","(\d{4,7})\n",.*?"(\d+)\n"', re.DOTALL)
-        for m in item_pattern.finditer(text):
-            pos = m.start()
-            ref = m.group(1).strip()
-            qty = int(m.group(2).strip())
-            current_cde = cmd_positions[cmd_starts[0]]
-            for start in cmd_starts:
-                if start <= pos:
-                    current_cde = cmd_positions[start]
-                else:
-                    break
-            orders.append({"Commande": current_cde, "Ref": ref, "Qte_Cde": qty})
+                for line in text.split("\n"):
+                    # Détection numéro commande
+                    m = regex_cde.search(line)
+                    if m:
+                        current_cde = m.group(1)
+                        continue
+
+                    # Lignes de produits
+                    m = regex_ligne.match(line)
+                    if m and current_cde:
+                        ref = m.group(1)
+                        nb_cartons = int(m.group(2))   # non utilisé mais valide
+                        qte_commande = int(m.group(3))
+
+                        orders.append({
+                            "Commande": current_cde,
+                            "Ref": ref,
+                            "Qte_Cde": qte_commande
+                        })
+
         return pd.DataFrame(orders)
+
     except Exception as e:
-        st.error(f"Erreur lecture PDF: {e}")
+        st.error(f"Erreur extraction PDF Auchan : {e}")
         return pd.DataFrame()
 
-# --- Main ---
+
+# --- SIDEBAR ---
+with st.sidebar:
+    st.header("1. Stock (Excel)")
+    f_stock = st.file_uploader("Fichier Inventory.xlsx", type=["xlsx"])
+    
+    st.header("2. Commandes (PDF)")
+    f_pdf = st.file_uploader("Fichier Commandes.pdf", type=["pdf"])
+    
+    st.divider()
+    search_input = st.text_input("🔍 Recherche article", placeholder="Code ou Libellé...")
+
+# --- MAIN ---
 if f_stock:
     df_stock = load_stock(f_stock)
-    df_display = df_stock.copy()
-    if search_input:
-        mask = df_display["N° article."].str.contains(search_input, case=False, na=False) | \
-               df_display["Description"].str.contains(search_input, case=False, na=False)
-        df_display = df_display[mask]
     
-    st.subheader("📦 Aperçu du stock")
-    st.dataframe(df_display[["N° article.", "Description", "Inventory", "Stock Colis", "Statut"]], use_container_width=True)
+    # --- FILTRE RECHERCHE GLOBAL ---
+    df = df_stock.copy()
+    if search_input:
+        mask = (df["N° article."].str.contains(search_input, case=False, na=False) | 
+                df["Description"].str.contains(search_input, case=False, na=False))
+        df = df[mask]
 
-if f_stock and f_pdf:
-    df_cde = extract_pdf_force(f_pdf)
-    if df_cde.empty:
-        st.warning("⚠️ Aucune commande exploitable trouvée dans le PDF")
-    else:
-        # --- Analyse commandes vs stock ---
-        stock_live = df_stock.set_index("N° article.")["Inventory"].to_dict()
-        desc_live = df_stock.set_index("N° article.")["Description"].to_dict()
+    # --- INDICATEURS DE STOCK (RÉTABLIS) ---
+    st.markdown("### 📊 Indicateurs de Stock")
+    
+    k1, k2, k3 = st.columns(3)
+    k1.metric("Articles trouvés", len(df))
+    nb_rupt = len(df[df["Statut"] == "Rupture"])
+    nb_faible = len(df[df["Statut"] == "Faible"])
+    k2.metric("❌ En Rupture", nb_rupt, delta=0 if nb_rupt == 0 else -nb_rupt, delta_color="inverse")
+    k3.metric("⚠️ Stock Faible", nb_faible, delta_color="normal")
+    
+    st.divider()
 
-        analyse = []
-        for num_cde, group in df_cde.groupby("Commande"):
-            total_commandé = group["Qte_Cde"].sum()
-            total_servi = 0
-            ruptures = 0
-            for _, row in group.iterrows():
-                ref = row["Ref"]
-                qte = row["Qte_Cde"]
-                dispo = stock_live.get(ref,0)
-                servi = min(qte, dispo)
-                total_servi += servi
-                ruptures += (qte - servi)
-                stock_live[ref] = max(0, dispo - servi)
-            taux = (total_servi / total_commandé * 100) if total_commandé>0 else 0
-            analyse.append({
-                "Commande": num_cde,
-                "Articles_Commandés": total_commandé,
-                "Articles_Livrés": total_servi,
-                "Articles_Non_Livrés": ruptures,
-                "Taux_Service (%)": round(taux,1)
-            })
+    # --- CRÉATION DES ONGLETS ---
+    t_noms = []
+    if f_pdf: t_noms.append("🚀 Analyse Commandes")
+    t_noms.extend(["❌ Ruptures", "⚠️ Stock Faible", "✅ Stock OK", "📁 Tout"])
+    
+    tabs = st.tabs(t_noms)
+    
+    # --- 1. LOGIQUE ANALYSE COMMANDES (Si PDF) ---
+    if f_pdf:
+        with tabs[t_noms.index("🚀 Analyse Commandes")]:
+            st.subheader("Résultat de l'analyse des Commandes")
+            df_cde = extract_pdf_force(f_pdf)
+            
+            if df_cde.empty or 'Ref' not in df_cde.columns or len(df_cde) < 1:
+                st.warning("⚠️ Aucune ligne de commande exploitable trouvée dans le PDF. Le format est trop fragmenté. Veuillez vérifier que le fichier est bien un PDF texte et non une image.")
+            else:
+                # Moteur de calcul (Simule l'épuisement du stock)
+                stock_live = df_stock.set_index("N° article.")["Inventory"].to_dict()
+                desc_live = df_stock.set_index("N° article.")["Description"].to_dict()
+                
+                analyse = []
+                
+                for num_cde, data_cde in df_cde.groupby("Commande"):
+                    tot_demande, tot_servi = 0, 0
+                    lignes_ko = []
+                    
+                    for _, row in data_cde.iterrows():
+                        ref, qte = row["Ref"], row["Qte_Cde"]
+                        stock_dispo = stock_live.get(ref, 0)
+                        
+                        tot_demande += qte
+                        servi = min(qte, stock_dispo)
+                        tot_servi += servi
+                        stock_live[ref] = max(0, stock_dispo - qte) # Déduction immédiate
+                        
+                        if servi < qte:
+                            manque = qte - servi
+                            lignes_ko.append({
+                                "Ref": ref,
+                                "Article": desc_live.get(ref, f"Article {ref} (Non trouvé en stock)"),
+                                "Commandé": qte,
+                                "Manquant": manque
+                            })
+                    
+                    taux = (tot_servi / tot_demande * 100) if tot_demande > 0 else 0
+                    analyse.append({"Commande": num_cde, "Taux": taux, "Demande": tot_demande, "Servi": tot_servi, "Alertes": lignes_ko})
+                
+                df_ana = pd.DataFrame(analyse)
+                
+                # --- INDICATEURS ANALYSE PDF ---
+                taux_global = df_ana["Servi"].sum() / df_ana["Demande"].sum() * 100
+                manquants_total = df_ana["Demande"].sum() - df_ana["Servi"].sum()
+                
+                k1_a, k2_a, k3_a = st.columns(3)
+                k1_a.metric("Commandes analysées", len(df_ana))
+                k2_a.metric("Taux de Service Moyen", f"{taux_global:.1f}%", delta="Global")
+                k3_a.metric("Pièces non livrables", int(manquants_total), delta_color="inverse")
+                
+                st.markdown("---")
+                
+                # Affichage détaillé par commande
+                for idx, row in df_ana.iterrows():
+                    titre = f"Commande {row['Commande']} — Taux: {row['Taux']:.1f}% ({int(row['Servi'])}/{int(row['Demande'])})"
+                    icon = "✅" if row["Taux"] == 100 else "⚠️" if row["Taux"] >= 95 else "❌"
+                        
+                    with st.expander(f"{icon} {titre}"):
+                        if row["Alertes"]:
+                            st.error(f"🛑 {len(row['Alertes'])} références en rupture sur cette commande :")
+                            st.dataframe(pd.DataFrame(row["Alertes"]), hide_index=True)
+                        else:
+                            st.success("Tout est en stock pour cette commande !")
 
-        df_analyse = pd.DataFrame(analyse).sort_values("Taux_Service (%)")
-        st.subheader("📋 Analyse par commande")
-        st.dataframe(df_analyse, use_container_width=True)
+    # --- 2. LOGIQUE ONGLETS STOCK ---
+    
+    def show_tab(filtre, titre_onglet):
+        if titre_onglet not in t_noms: return 
+        idx = t_noms.index(titre_onglet)
+        
+        with tabs[idx]:
+            if filtre == "Tout":
+                d = df
+            else:
+                d = df[df["Statut"] == filtre]
+            
+            if d.empty:
+                st.info("Rien à afficher ici avec les filtres actuels.")
+            else:
+                top_n = st.slider(f"Nombre de lignes à afficher ({filtre})", 5, 100, 20, key=f"s_{idx}")
+                st.dataframe(
+                    d.head(top_n)[["N° article.", "Description", "Inventory", "Stock Colis", "Statut"]],
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config={
+                        "Inventory": st.column_config.NumberColumn("Stock (UVC)", format="%d"),
+                        "Stock Colis": st.column_config.NumberColumn("Colis (Est.)", format="%.1f"),
+                    }
+                )
 
-        # Taux global
-        total_cde = df_analyse["Articles_Commandés"].sum()
-        total_livré = df_analyse["Articles_Livrés"].sum()
-        taux_global = (total_livré/total_cde*100) if total_cde>0 else 0
-        st.markdown(f"### 📊 Taux de service global : {taux_global:.1f}%")
+    # Appel des onglets de stock
+    show_tab("Rupture", "❌ Ruptures")
+    show_tab("Faible", "⚠️ Stock Faible")
+    show_tab("OK", "✅ Stock OK")
+    show_tab("Tout", "📁 Tout")
 
-        # --- Export Excel ---
-        output = io.BytesIO()
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
-            df_analyse.to_excel(writer, sheet_name="Analyse_Commandes", index=False)
-            df_stock.to_excel(writer, sheet_name="Stock", index=False)
-        st.download_button(
-            "📥 Télécharger le rapport Excel",
-            data=output.getvalue(),
-            file_name=f"Rapport_GESTHOR_{timestamp}.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            use_container_width=True
-        )
+else:
+    st.info("👈 En attente du fichier Stock Excel...")
+
+# --- FOOTER ---
+st.markdown("""<div class="footer">Powered by IC - 2025 ★★★★★</div>""", unsafe_allow_html=True)
