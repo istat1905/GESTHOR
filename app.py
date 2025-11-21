@@ -1,12 +1,7 @@
 import streamlit as st
 from scraper import get_stock
-import subprocess
-import os
 
-# Installer Playwright si non présent
-if not os.path.exists(os.path.expanduser("~/.cache/ms-playwright")):
-    subprocess.run(["playwright", "install"], check=True)
-
+st.set_page_config(page_title="GESTHOR – Vérification Stock", layout="wide")
 st.title("GESTHOR – Vérification Stock")
 
 st.write("Entrez un code article et obtenez le stock disponible.")
@@ -19,9 +14,10 @@ if st.button("Vérifier le stock"):
     if not item_code:
         st.error("Merci de saisir un code article.")
     else:
-        try:
-            stock = get_stock(item_code, username, password)
-            st.success(f"Stock disponible : **{stock}**")
-        except Exception as e:
-            st.error("Erreur lors du scraping")
-            st.code(str(e))
+        with st.spinner("Connexion à Business Central et récupération du stock…"):
+            try:
+                stock = get_stock(item_code, username, password)
+                st.success(f"Stock disponible : **{stock}**")
+            except Exception as e:
+                st.error("Erreur lors du scraping")
+                st.code(str(e))
