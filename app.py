@@ -10,77 +10,80 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# --- CSS Personnalisé ---
+# --- CSS Épuré (Design plus clean) ---
 st.markdown("""
     <style>
-    /* Style des KPIs */
-    [data-testid="stMetric"] {
-        background-color: #f8f9fa;
+    /* Centrage du logo et titre */
+    .block-container {
+        padding-top: 2rem;
+    }
+    /* Style des KPIs plus léger et équilibré */
+    div[data-testid="stMetric"] {
+        background-color: #ffffff;
+        border: 1px solid #f0f2f6;
+        border-radius: 8px;
         padding: 15px;
-        border-radius: 10px;
-        border: 1px solid #e9ecef;
-        box-shadow: 2px 2px 5px rgba(0,0,0,0.05);
+        text-align: center;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+    }
+    div[data-testid="stMetricLabel"] {
+        justify-content: center;
+        font-weight: bold;
+        color: #555;
+    }
+    div[data-testid="stMetricValue"] {
+        justify-content: center;
+        color: #0072B5;
     }
     /* Pied de page */
     .footer {
         text-align: center;
-        margin-top: 3rem;
+        margin-top: 4rem;
         padding-top: 1rem;
-        border-top: 1px solid #e9ecef;
-        color: #6c757d;
-    }
-    .footer-stars {
-        color: #f1c40f;
-        letter-spacing: 5px;
+        border-top: 1px solid #eee;
+        color: #888;
+        font-size: 0.8rem;
     }
     </style>
     """, unsafe_allow_html=True)
 
-# --- EN-TÊTE AVEC LOGO ---
-col_logo1, col_logo2, col_logo3 = st.columns([1, 2, 1])
-
-with col_logo2:
+# --- LOGO CENTRÉ (Tout en haut) ---
+col_l1, col_l2, col_l3 = st.columns([1, 1, 1])
+with col_l2:
     try:
-        # Assurez-vous que le fichier s'appelle exactement "Gesthor.png" sur GitHub
-        st.image("Gesthor.png", width=350) 
+        # Affiche le logo centré
+        st.image("Gesthor.png", use_container_width=True) 
     except:
         st.markdown("<h1 style='text-align: center; color: #0072B5;'>GESTHOR</h1>", unsafe_allow_html=True)
 
-st.markdown("<h3 style='text-align: center; color: grey;'>📦 Tableau de bord de gestion de stock</h3>", unsafe_allow_html=True)
-st.markdown("---")
+st.markdown("<h4 style='text-align: center; color: grey; font-weight: normal; margin-bottom: 30px;'>Tableau de bord de gestion de stock</h4>", unsafe_allow_html=True)
 
-# --- Fonction de chargement ---
+# --- Fonction de chargement robuste ---
 @st.cache_data
 def load_data(file):
     try:
         data = pd.read_excel(file)
+        # Conversion immédiate en TEXTE pour que la recherche fonctionne à 100%
         if "N° article." in data.columns:
-            data["N° article."] = data["N° article."].astype(str)
+            data["N° article."] = data["N° article."].astype(str).str.strip()
         if "Description" in data.columns:
-            data["Description"] = data["Description"].astype(str)
+            data["Description"] = data["Description"].astype(str).str.strip()
         return data
     except ImportError:
-        st.error("🛑 Erreur : Module Excel manquant. Essayez d'enregistrer le fichier en CSV.")
+        st.error("Module Excel manquant. Convertissez votre fichier en CSV.")
         return None
     except Exception as e:
-        st.error(f"Erreur de lecture : {e}")
+        st.error(f"Erreur : {e}")
         return None
 
-# --- Sidebar ---
+# --- Sidebar (Juste l'upload et la recherche) ---
 with st.sidebar:
-    st.header("GESTHOR")
-    st.caption("Version: v5.0 (Stable)")
-    st.divider()
-    
-    st.header("📂 Fichier")
-    uploaded_file = st.file_uploader("Charger Excel (.xlsx)", type=["xlsx"])
+    st.header("📂 Données")
+    uploaded_file = st.file_uploader("Fichier Excel (.xlsx)", type=["xlsx"])
     
     st.divider()
-    st.header("⚙️ Filtres")
-    search_input = st.text_input("🔍 Recherche (Code/Desc)")
-    
-    filter_rupture = st.checkbox("❌ Ruptures uniquement", value=False)
-    filter_faible = st.checkbox("⚠️ Stock faible uniquement", value=False)
+    st.header("🔍 Recherche")
+    search_input = st.text_input("Tapez un code ou un nom...", placeholder="Ex: 1024 ou Carton")
 
 # --- Logique Principale ---
 if uploaded_file is not None:
@@ -89,19 +92,19 @@ if uploaded_file is not None:
     if df_original is not None:
         df = df_original.copy()
         
-        # Vérification colonnes
+        # 1. CALCULS & NETTOYAGE
         required_cols = ["Inventory", "Qty. per Sales Unit of Measure", "N° article.", "Description"]
         missing_cols = [col for col in required_cols if col not in df.columns]
 
         if missing_cols:
-            st.error(f"⚠️ Colonnes manquantes : {', '.join(missing_cols)}")
+            st.error(f"Colonnes manquantes : {', '.join(missing_cols)}")
         else:
-            # 1. Calculs
+            # Nettoyage numérique
             df["Qty. per Sales Unit of Measure"] = pd.to_numeric(df["Qty. per Sales Unit of Measure"], errors='coerce').fillna(1)
             df["Inventory"] = pd.to_numeric(df["Inventory"], errors='coerce').fillna(0)
             df["Stock en colis"] = df["Inventory"] / df["Qty. per Sales Unit of Measure"].replace(0, 1)
             
-            # Statuts
+            # Attribution des Statuts
             conditions = [
                 (df["Inventory"] <= 0),
                 (df["Inventory"] < 500)
@@ -109,78 +112,86 @@ if uploaded_file is not None:
             choices = ["Rupture", "Faible"]
             df["Statut"] = np.select(conditions, choices, default="OK")
 
-            # 2. Filtres
+            # 2. MOTEUR DE RECHERCHE (CORRIGÉ)
+            # On filtre AVANT de faire les onglets pour que la recherche s'applique partout
             if search_input:
                 mask = (
                     df["N° article."].str.contains(search_input, case=False, na=False) | 
                     df["Description"].str.contains(search_input, case=False, na=False)
                 )
                 df = df[mask]
-            
-            status_filters = []
-            if filter_rupture: status_filters.append("Rupture")
-            if filter_faible: status_filters.append("Faible")
-            if status_filters:
-                 df = df[df["Statut"].isin(status_filters)]
 
-            # 3. KPIs
-            st.subheader("📊 Indicateurs")
+            # 3. INDICATEURS (KPIS) ÉQUILIBRÉS
             k1, k2, k3, k4 = st.columns(4)
-            k1.metric("Articles", len(df))
-            nb_rupt = len(df_original[df_original["Inventory"] <= 0])
-            k2.metric("Alertes Rupture (Total)", nb_rupt, delta=-nb_rupt, delta_color="inverse")
-            k3.metric("Unités (Visibles)", f"{int(df['Inventory'].sum()):,}".replace(",", " "))
-            k4.metric("Colis (Estimés)", f"{float(df['Stock en colis'].sum()):,.1f}")
-
-            st.divider()
-
-            # 4. Graphiques NATIFS (Correction ici : suppression de l'argument color)
-            col_g1, col_g2 = st.columns(2)
             
-            with col_g1:
-                st.subheader("Répartition des statuts")
-                if not df.empty:
-                    status_counts = df["Statut"].value_counts()
-                    # On laisse Streamlit choisir la couleur pour éviter le crash
-                    st.bar_chart(status_counts) 
-                else:
-                    st.info("Aucune donnée.")
+            # Données globales (après recherche)
+            nb_rupt = len(df[df["Statut"] == "Rupture"])
+            nb_faible = len(df[df["Statut"] == "Faible"])
+            stock_tot = int(df["Inventory"].sum())
+            colis_tot = float(df["Stock en colis"].sum())
 
-            with col_g2:
-                st.subheader("Top 10 Stocks (Unités)")
-                if not df.empty:
-                    top_10 = df.nlargest(10, 'Inventory')[["N° article.", "Inventory"]].set_index("N° article.")
-                    st.bar_chart(top_10)
-                else:
-                    st.info("Aucune donnée.")
+            k1.metric("Articles trouvés", len(df))
+            k2.metric("En Rupture", nb_rupt, delta_color="inverse")
+            k3.metric("Stock Faible", nb_faible, delta_color="normal")
+            k4.metric("Volume Colis", f"{colis_tot:,.0f}")
 
             st.divider()
 
-            # 5. Tableau
-            st.subheader("📋 Détail")
-            st.dataframe(
-                df[["N° article.", "Description", "Inventory", "Qty. per Sales Unit of Measure", "Stock en colis", "Statut"]],
-                use_container_width=True,
-                hide_index=True,
-                column_config={
-                    "Inventory": st.column_config.NumberColumn("Stock (UVC)", format="%d"),
-                    "Stock en colis": st.column_config.ProgressColumn(
-                        "Stock (Colis)", 
-                        format="%.1f",
-                        max_value=float(df_original["Inventory"].max()/1) if not df_original.empty else 100,
-                    ),
-                }
-            )
+            # 4. GRAPHIQUE UNIQUE (Histogramme répartition)
+            st.subheader("📈 Répartition des stocks")
+            if not df.empty:
+                status_counts = df["Statut"].value_counts()
+                st.bar_chart(status_counts)
+            
+            st.divider()
+
+            # 5. ONGLETS (TABS)
+            tab_rupture, tab_faible, tab_ok, tab_tout = st.tabs(["❌ Ruptures", "⚠️ Stock Faible", "✅ Stock OK", "📁 Tout le stock"])
+
+            # Fonction pour afficher le contenu d'un onglet
+            def afficher_onglet(dataframe, filtre_statut=None):
+                if filtre_statut:
+                    data_view = dataframe[dataframe["Statut"] == filtre_statut]
+                else:
+                    data_view = dataframe
+                
+                if data_view.empty:
+                    st.info("Aucun article dans cette catégorie.")
+                else:
+                    # Sélecteur de quantité (Slider) local à l'onglet
+                    limit = st.slider(f"Nombre d'articles à afficher", 1, 100, 10, key=f"slider_{filtre_statut}")
+                    
+                    # Affichage du tableau
+                    st.dataframe(
+                        data_view.head(limit)[["N° article.", "Description", "Inventory", "Stock en colis", "Statut"]],
+                        use_container_width=True,
+                        hide_index=True,
+                        column_config={
+                            "Inventory": st.column_config.NumberColumn("Unités", format="%d"),
+                            "Stock en colis": st.column_config.ProgressColumn("Colis", format="%.1f", max_value=float(df_original["Inventory"].max()/1) if not df_original.empty else 100),
+                        }
+                    )
+
+            # Remplissage des onglets
+            with tab_rupture:
+                afficher_onglet(df, "Rupture")
+            
+            with tab_faible:
+                afficher_onglet(df, "Faible")
+            
+            with tab_ok:
+                afficher_onglet(df, "OK")
+            
+            with tab_tout:
+                afficher_onglet(df, None)
 
 else:
-    col_center1, col_center2, col_center3 = st.columns([1, 2, 1])
-    with col_center2:
-        st.info("👈 Veuillez charger un fichier Excel dans le menu latéral.")
+    # Message d'accueil simple
+    st.info("👈 Veuillez charger votre fichier Excel dans le menu de gauche.")
 
 # --- PIED DE PAGE ---
 st.markdown("""
     <div class="footer">
-        <div class="footer-stars">★★★★★</div>
-        <p>Powered by IC - 2025</p>
+        <p>Powered by IC - 2025 ★★★★★</p>
     </div>
     """, unsafe_allow_html=True)
