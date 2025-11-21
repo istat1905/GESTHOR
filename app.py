@@ -229,7 +229,7 @@ with st.sidebar:
     if st.button("🚪 Déconnexion", use_container_width=True):
         st.session_state.authenticated = False
         st.rerun()
-        
+        st.divider()
     # --- NOUVEAU BOUTON IMAGE ---
     # Nous utilisons st.markdown avec la balise <a> pour créer un lien cliquable
     # contenant votre image 'desathor.png'.
