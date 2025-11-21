@@ -150,7 +150,7 @@ def extract_pdf_force(pdf_file):
             # 1. Trouver toutes les commandes et leur position dans le texte
             cmd_matches = list(re.finditer(r"Commande\s*n[°º]?\s*[:\s-]*?(\d{5,10})", full_text))
             if not cmd_matches: 
-                st.warning("⚠️ Aucune entête 'Commande n°' trouvée dans le PDF.")
+                # Ne pas afficher de warning ici, il sera affiché plus tard si df_cde est vide
                 return pd.DataFrame()
             
             cmd_positions = {m.start(): m.group(1) for m in cmd_matches}
@@ -192,7 +192,6 @@ def extract_pdf_force(pdf_file):
                 return pd.DataFrame(orders).drop_duplicates()
 
             # --- MODE 2: Format Tableau Fragmenté (Fallback ultra-robuste) ---
-            # Objectif: trouver Réf. frn (G1) et Qté commandée (G2) sur la même ligne ou très proche
             # Anchor: N° de ligne [Ref] ... [Qte] [Pcb] [Prix]
             item_pattern_mode2 = re.compile(
                 r'\n\s*\d+\s+'          # Début d'une ligne d'article (ex: "\n 1 ")
@@ -435,7 +434,8 @@ if f_stock:
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                 filename = f"Rapport_Rupture_GESTHOR_{timestamp}.xlsx"
 
-                with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
+                # VÉRIFIEZ BIEN CETTE LIGNE (ligne 446) : doit être openpyxl
+                with pd.ExcelWriter(output, engine="openpyxl") as writer: 
                     
                     # Feuille 1: Récapitulatif
                     df_summary = df_ana[["Commande", "Taux", "Demande", "Servi"]].rename(
