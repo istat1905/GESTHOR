@@ -11,12 +11,14 @@ from pathlib import Path
 # --- Vérification Plotly ---
 try:
     import plotly.graph_objects as go
+    # Nécessaire pour les graphiques
+    import plotly.express as px 
     PLOTLY_AVAILABLE = True
 except ImportError:
     PLOTLY_AVAILABLE = False
 
 # --- Configuration ---
-st.set_page_config(page_title="GESTHOR Pro", page_icon="📦", layout="wide")
+#st.set_page_config(page_title="GESTHOR Pro", page_icon="📦", layout="wide") # Commenté pour éviter la double config si l'utilisateur l'a déjà fait
 
 # --- Fichier de sauvegarde ---
 HISTORY_FILE = "gesthor_history.json"
@@ -42,7 +44,27 @@ if "search_history" not in st.session_state:
     st.session_state.search_history = []
 if "current_search" not in st.session_state:
     st.session_state.current_search = ""
+# NOUVEAU: État pour l'onglet actif après recherche
+if "active_tab_name" not in st.session_state:
+    st.session_state.active_tab_name = "📋 Tout" # Default tab is "All"
 
+# --- FONCTION LOGO CENTRÉ (Répond à la demande 2) ---
+def display_centered_logo(subtitle, is_login=False):
+    """Affiche le logo et le titre au centre."""
+    # Note: L'utilisateur doit s'assurer que 'Gesthor.png' est dans le répertoire.
+    # st.image n'est pas idéal pour le centrage parfait avec HTML, on utilise markdown
+    # pour un meilleur contrôle du positionnement.
+    if is_login:
+        st.set_page_config(page_title="GESTHOR Pro", page_icon="📦", layout="wide")
+        
+    st.markdown(f"""
+        <div style="text-align: center; margin-bottom: 2rem;">
+            <img src="Gesthor.png" alt="GESTHOR Logo" style="width:180px; height:auto; border-radius: 10px; box-shadow: 0 4px 10px rgba(0, 114, 181, 0.2);">
+            <h1 style='color: #0072B5; margin-top: 1rem; margin-bottom: 0;'>GESTHOR PRO</h1>
+            <h4 style='color: grey; font-weight: normal; margin-top: 0.5rem; text-align: center;'>{subtitle}</h4>
+        </div>
+        """, unsafe_allow_html=True)
+        
 # --- CSS ---
 st.markdown("""
     <style>
@@ -63,12 +85,12 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# --- HEADER ---
-st.markdown("<h1 style='text-align: center; color: #0072B5;'>📦 GESTHOR PRO</h1>", unsafe_allow_html=True)
-st.markdown("<h4 style='text-align: center; color: grey; font-weight: normal;'>Gestion Intelligente de Stock & Commandes</h4>", unsafe_allow_html=True)
 
 # --- CONNEXION ---
 if not st.session_state.authenticated:
+    # Utilisation du logo sur la page de connexion
+    display_centered_logo("Gestion Intelligente de Stock & Commandes", is_login=True)
+
     st.markdown("---")
     st.markdown("### 🔒 Connexion requise")
     col1, col2, col3 = st.columns([1, 2, 1])
@@ -90,8 +112,10 @@ if not st.session_state.authenticated:
                     st.error("❌ Identifiant ou mot de passe incorrect")
         st.info("💡 **Demo**: user1 / user123")
     st.stop()
+    
+# --- LE RESTE DU CODE DOIT ÊTRE DANS DES FONCTIONS OU SOUS LA CONDITION D'AUTHENTIFICATION
 
-# --- FONCTIONS ---
+# --- FONCTIONS (inchangées) ---
 
 def load_history():
     try:
@@ -163,6 +187,15 @@ def extract_pdf_improved(pdf_file):
             cmd_positions = {match.start(): match.group(1) for match in cmd_matches}
             cmd_starts = sorted(cmd_positions.keys())
             
+            def associate_to_order(item_pos, cmd_positions, cmd_starts):
+                current_cmd = "INCONNU"
+                for start_pos in cmd_starts:
+                    if start_pos <= item_pos:
+                        current_cmd = cmd_positions[start_pos]
+                    else:
+                        break
+                return current_cmd
+            
             line_pattern = re.compile(
                 r'^\s*(\d{1,3})\s+(\d{3,7})\s+(\d{13})\s+(\d{1,4})\s+(.+?)\s+(\d{1,5})\s+(\d{1,4})\s+(?:EUR|\d+[,\.]\d+)',
                 re.MULTILINE
@@ -174,12 +207,7 @@ def extract_pdf_improved(pdf_file):
                     ref = match.group(2).strip()
                     qty = int(match.group(6).strip())
                     
-                    current_cmd = "INCONNU"
-                    for start_pos in cmd_starts:
-                        if start_pos <= pos:
-                            current_cmd = cmd_positions[start_pos]
-                        else:
-                            break
+                    current_cmd = associate_to_order(pos, cmd_positions, cmd_starts)
                     
                     orders.append({"Commande": current_cmd, "Ref": ref, "Qte_Cde": qty})
                 except:
@@ -197,12 +225,7 @@ def extract_pdf_improved(pdf_file):
                         ref = match.group(1).strip()
                         qty = int(match.group(2).strip())
                         
-                        current_cmd = "INCONNU"
-                        for start_pos in cmd_starts:
-                            if start_pos <= pos:
-                                current_cmd = cmd_positions[start_pos]
-                            else:
-                                break
+                        current_cmd = associate_to_order(pos, cmd_positions, cmd_starts)
                         
                         orders.append({"Commande": current_cmd, "Ref": ref, "Qte_Cde": qty})
                     except:
@@ -233,22 +256,27 @@ with st.sidebar:
     st.divider()
     
     st.markdown("### 🔍 Recherche")
+    # Utiliser st.session_state.current_search pour que la valeur soit persistante
     search_input = st.text_input(
         "Article",
         value=st.session_state.current_search,
-        placeholder="Code ou nom..."
+        placeholder="Code ou nom...",
+        key="search_box_input"
     )
     
-    if search_input and search_input != st.session_state.current_search:
-        st.session_state.current_search = search_input
-        if search_input not in st.session_state.search_history:
-            st.session_state.search_history.insert(0, search_input)
+    # Mise à jour de l'historique de recherche lors du changement de valeur
+    if st.session_state.search_box_input != st.session_state.current_search:
+         st.session_state.current_search = st.session_state.search_box_input
+         if st.session_state.current_search and st.session_state.current_search not in st.session_state.search_history:
+            st.session_state.search_history.insert(0, st.session_state.current_search)
             st.session_state.search_history = st.session_state.search_history[:10]
-    
+            st.session_state.active_tab_name = "📋 Tout" # Reset tab on new search entry
+
     col_r1, col_r2 = st.columns(2)
     with col_r1:
         if st.button("🔄 Reset", use_container_width=True):
             st.session_state.current_search = ""
+            st.session_state.active_tab_name = "📋 Tout"
             st.rerun()
     
     if st.session_state.search_history:
@@ -279,6 +307,10 @@ with st.sidebar:
         st.rerun()
 
 # --- MAIN ---
+# Utilisation du logo sur la page principale (demande 2)
+display_centered_logo("Gestion Intelligente de Stock & Commandes")
+st.markdown("---")
+
 if f_stock:
     df_stock = load_stock(f_stock)
     
@@ -286,18 +318,39 @@ if f_stock:
         st.stop()
     
     df = df_stock.copy()
+    
+    # LOGIQUE DE RECHERCHE ET DE SÉLECTION D'ONGLET (Répond à la demande 1)
     if st.session_state.current_search:
         mask = (
             df["N° article."].str.contains(st.session_state.current_search, case=False, na=False) |
             df["Description"].str.contains(st.session_state.current_search, case=False, na=False)
         )
         df = df[mask]
+        
         if not df.empty:
-            st.success(f"🎯 {len(df)} résultat(s) pour '{st.session_state.current_search}'")
+            # Déterminer le statut dominant de l'article pour choisir l'onglet
+            # Si un seul article est trouvé, on utilise son statut
+            # Sinon, on prend le statut le plus critique (Rupture > Faible > OK)
+            
+            statuses = df['Statut'].unique()
+            if "Rupture" in statuses:
+                st.session_state.active_tab_name = "❌ Ruptures"
+            elif "Faible" in statuses:
+                st.session_state.active_tab_name = "⚠️ Faible"
+            elif "OK" in statuses and len(statuses) == 1:
+                st.session_state.active_tab_name = "✅ OK"
+            else:
+                st.session_state.active_tab_name = "📋 Tout"
+                
+            st.success(f"🎯 {len(df)} résultat(s) pour '{st.session_state.current_search}'. Affichage de l'onglet: {st.session_state.active_tab_name}")
         else:
-            st.warning(f"Aucun résultat")
+            st.warning(f"Aucun résultat pour '{st.session_state.current_search}'")
+            st.session_state.active_tab_name = "📋 Tout"
+    else:
+        # Si la recherche est vide, on revient à l'onglet par défaut
+        st.session_state.active_tab_name = "📋 Tout"
     
-    st.markdown("### 📊 Stock")
+    st.markdown("### 📊 Indicateurs Stock")
     k1, k2, k3, k4 = st.columns(4)
     
     k1.metric("📦 Articles", len(df))
@@ -312,12 +365,21 @@ if f_stock:
         tabs_list.append("🚀 Commandes")
     tabs_list.extend(["❌ Ruptures", "⚠️ Faible", "✅ OK", "📋 Tout"])
     
-    tabs = st.tabs(tabs_list)
+    # Déterminer l'index par défaut
+    try:
+        default_index = tabs_list.index(st.session_state.active_tab_name)
+    except ValueError:
+        default_index = 0 # Par défaut au premier onglet si l'onglet calculé n'existe pas
+
+    # Utilisation de default_index pour forcer l'ouverture du bon onglet
+    tabs = st.tabs(tabs_list, default_index=default_index)
     
     # --- ANALYSE ---
     if f_pdf:
-        with tabs[0]:
-            st.subheader("📊 Analyse")
+        # L'analyse est toujours dans le premier onglet si f_pdf est présent
+        tab_index_cde = tabs_list.index("🚀 Commandes")
+        with tabs[tab_index_cde]:
+            st.subheader("📊 Analyse Commandes")
             
             df_cde = extract_pdf_improved(f_pdf)
             
@@ -376,8 +438,17 @@ if f_stock:
                 tot_servi_g = df_ana["Servi"].sum()
                 taux_global = (tot_servi_g / tot_demande_g * 100) if tot_demande_g > 0 else 0
                 
+                # Sauvegarde de l'historique
+                add_to_history({
+                    'nb_commandes': len(df_ana),
+                    'taux_global': taux_global,
+                    'total_demande': int(tot_demande_g),
+                    'total_servi': int(tot_servi_g)
+                })
+                
                 kpi1, kpi2, kpi3, kpi4 = st.columns(4)
                 
+                # --- KPIs (inchangés) ---
                 with kpi1:
                     st.markdown(f"""
                     <div class="kpi-card" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);">
@@ -411,17 +482,10 @@ if f_stock:
                     </div>
                     """, unsafe_allow_html=True)
                 
-                add_to_history({
-                    'nb_commandes': len(df_ana),
-                    'taux_global': taux_global,
-                    'total_demande': int(tot_demande_g),
-                    'total_servi': int(tot_servi_g)
-                })
-                
                 st.markdown("---")
                 
                 if PLOTLY_AVAILABLE:
-                    st.markdown("### 📈 Performance")
+                    st.markdown("### 📈 Performance par Commande")
                     df_plot = df_ana.sort_values("Taux", ascending=True)
                     
                     fig = go.Figure(data=[
@@ -446,13 +510,13 @@ if f_stock:
                     st.plotly_chart(fig, use_container_width=True)
                 
                 st.markdown("---")
-                st.markdown("### 📋 Détail")
+                st.markdown("### 📋 Détail Commande")
                 
                 col1, col2 = st.columns(2)
                 with col1:
-                    mode = st.radio("Vue", ["🔴 Problèmes", "🟢 OK", "📊 Tout"], horizontal=True)
+                    mode = st.radio("Vue Lignes", ["🔴 Problèmes", "🟢 OK", "📊 Tout"], horizontal=True)
                 with col2:
-                    sort = st.selectbox("Tri", ["Taux ↑", "Taux ↓", "N° cde"])
+                    sort = st.selectbox("Tri Commandes", ["Taux ↑", "Taux ↓", "N° cde"])
                 
                 if sort == "Taux ↑":
                     df_display = df_ana.sort_values("Taux")
@@ -471,6 +535,7 @@ if f_stock:
                     icon = "✅" if taux == 100 else "⚠️" if taux >= 95 else "❌"
                     
                     with st.expander(f"{icon} Cde {row['Commande']} – {taux:.1f}% ({int(row['Servi'])}/{int(row['Demande'])})", expanded=(taux < 100)):
+                        # Onglets pour Livrés et Manquants
                         sub = st.tabs([f"🟢 Livrés ({len(row['Livres'])})", f"🔴 Manquants ({len(row['Alertes'])})"])
                         
                         with sub[0]:
@@ -481,7 +546,7 @@ if f_stock:
                                     use_container_width=True
                                 )
                             else:
-                                st.info("Aucun")
+                                st.info("Aucun article livré n'a été trouvé.")
                         
                         with sub[1]:
                             if row["Alertes"]:
@@ -512,7 +577,7 @@ if f_stock:
                         
                         if all_ruptures:
                             pd.DataFrame(all_ruptures).to_excel(w, sheet_name="Ruptures", index=False)
-                    
+                        
                     st.download_button(
                         "📊 Excel",
                         output.getvalue(),
@@ -535,18 +600,24 @@ if f_stock:
     def show_tab(filtre, nom):
         if nom not in tabs_list:
             return
-        idx = tabs_list.index(nom)
+        
+        # Trouver l'index de l'onglet dans la liste pour y injecter le contenu
+        try:
+            idx = tabs_list.index(nom)
+        except ValueError:
+            return
         
         with tabs[idx]:
             if filtre == "Tout":
                 d = df
             else:
+                # Filtrer sur le df déjà filtré par la recherche globale
                 d = df[df["Statut"] == filtre]
             
             if d.empty:
                 st.info("Aucune donnée")
             else:
-                n = st.slider("Lignes", 5, 100, 20, key=f"sl_{idx}")
+                n = st.slider(f"Lignes à afficher ({filtre})", 5, 100, 20, key=f"sl_{idx}")
                 st.dataframe(
                     d.sort_values("Inventory", ascending=(filtre!="OK")).head(n)[
                         ["N° article.", "Description", "Inventory", "Stock Colis", "Statut"]
