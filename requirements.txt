@@ -1,6 +1,2 @@
 streamlit
-selenium
-webdriver-manager
-chromedriver-autoinstaller
-streamlit
 playwright
