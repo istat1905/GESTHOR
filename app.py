@@ -136,8 +136,18 @@ def load_stock(file):
         st.error(f"Erreur Excel : {e}")
         return None
 
+def associate_to_order(item_pos, cmd_positions, cmd_starts):
+    """ Associe la position de l'article à la commande la plus proche """
+    current_cde = cmd_positions[cmd_starts[0]]
+    for start in cmd_starts:
+        if start <= item_pos:
+            current_cde = cmd_positions[start]
+        else:
+            break
+    return current_cde
+
 def extract_pdf_force(pdf_file):
-    """ Moteur d'extraction double mode pour PDF (CSV entre guillemets ou Tableau fragmenté) """
+    """ Moteur d'extraction triple mode pour PDF (CSV, Tableau, Ultra-Fallback) """
     orders = []
     
     try:
@@ -150,36 +160,28 @@ def extract_pdf_force(pdf_file):
             # 1. Trouver toutes les commandes et leur position dans le texte
             cmd_matches = list(re.finditer(r"Commande\s*n[°º]?\s*[:\s-]*?(\d{5,10})", full_text))
             if not cmd_matches: 
-                # Ne pas afficher de warning ici, il sera affiché plus tard si df_cde est vide
                 return pd.DataFrame()
             
             cmd_positions = {m.start(): m.group(1) for m in cmd_matches}
             cmd_starts = sorted(cmd_positions.keys())
             
-            # --- MODE 1: Format Quoted CSV (pour les formats très structurés) ---
-            # Objectif: trouver Réf. frn (G1) et Qté commandée (G2) en comptant les champs quoted
+            # --- TENTATIVE 1: MODE CSV QUOTÉ (Très structuré) ---
+            # Objectif: trouver Réf. frn (G1) et Qté commandée (G2)
             item_pattern_mode1 = re.compile(
                 r'"\d+\n",'                          # Champ 1: Ligne N°
                 r'"(\d{4,7})\n",'                      # Champ 2: Réf. frn (Group 1)
                 r'.*?'                                # Champs 3, 4, 5 (EAN, Carton, Libellé)
                 r'"(\d+)\n",'                         # Champ 6: Qté commandée (Group 2)
-                r'"\d+\n","EUR\n"',                   # Champ 7 & 8 (Pcb et Devise)
+                r'(?:"\d+\n",)?(?:"EUR\n")?',         # Optional: Pcb et Devise
                 re.DOTALL | re.IGNORECASE
             )
             
-            # --- Tenter Mode 1 ---
             for item_match in item_pattern_mode1.finditer(full_text):
                 item_pos = item_match.start()
                 ref = item_match.group(1).strip()
                 qty = item_match.group(2).strip()
                 
-                # Associer à la commande
-                current_cde = cmd_positions[cmd_starts[0]]
-                for start in cmd_starts:
-                    if start <= item_pos:
-                        current_cde = cmd_positions[start]
-                    else:
-                        break
+                current_cde = associate_to_order(item_pos, cmd_positions, cmd_starts)
                         
                 orders.append({
                     "Commande": current_cde,
@@ -191,32 +193,24 @@ def extract_pdf_force(pdf_file):
                 st.info(f"✅ Extraction réussie (Mode 1: {len(orders)} lignes trouvées).")
                 return pd.DataFrame(orders).drop_duplicates()
 
-            # --- MODE 2: Format Tableau Fragmenté (Fallback ultra-robuste) ---
-            # Anchor: N° de ligne [Ref] ... [Qte] [Pcb] [Prix]
+            # --- TENTATIVE 2: MODE TABLEAU FRAGMENTÉ (Ancrage sur Prix/Pcb) ---
             item_pattern_mode2 = re.compile(
                 r'\n\s*\d+\s+'          # Début d'une ligne d'article (ex: "\n 1 ")
                 r'(\d{4,7})\s+'         # Group 1: Réf. frn (e.g., 118500)
                 r'.*?'                  # Match non gourmand pour Description/Cond.
-                r'(\d+)\s+'             # Group 2: Qté commandée (Le premier nombre entier avant Pcb et Prix)
+                r'(\d+)\s+'             # Group 2: Qté commandée
                 r'\d+\s+'               # Pcb
                 r'\d+,\d+'              # Prix (ancrage)
                 , re.DOTALL 
             )
 
             orders_mode2 = []
-            # --- Tenter Mode 2 ---
             for item_match in item_pattern_mode2.finditer(full_text):
                 item_pos = item_match.start()
                 ref = item_match.group(1).strip()
                 qty = item_match.group(2).strip()
                 
-                # Associer à la commande
-                current_cde = cmd_positions[cmd_starts[0]]
-                for start in cmd_starts:
-                    if start <= item_pos:
-                        current_cde = cmd_positions[start]
-                    else:
-                        break
+                current_cde = associate_to_order(item_pos, cmd_positions, cmd_starts)
                         
                 orders_mode2.append({
                     "Commande": current_cde,
@@ -228,7 +222,34 @@ def extract_pdf_force(pdf_file):
                 st.info(f"✅ Extraction réussie (Mode 2: {len(orders_mode2)} lignes trouvées).")
                 return pd.DataFrame(orders_mode2).drop_duplicates()
 
-        # Si les deux modes échouent
+            # --- TENTATIVE 3: MODE ULTRA-FALLBACK (Ancrage minimal, pour les formats complexes/fusionnés) ---
+            item_pattern_mode3 = re.compile(
+                r'\n\s*\d{1,3}\s+'          # Ligne N° (1 à 3 chiffres)
+                r'(\d{4,7})\s+'             # Group 1: Réf. frn (4 à 7 chiffres) suivi d'un espace
+                r'.{1,250}?'                # Description/Autres champs (1 à 250 caractères max)
+                r'(\d{1,5})\s*[\n\r]'       # Group 2: Qté commandée (1 à 5 chiffres) avant un retour à la ligne
+                , re.DOTALL
+            )
+            
+            orders_mode3 = []
+            for item_match in item_pattern_mode3.finditer(full_text):
+                item_pos = item_match.start()
+                ref = item_match.group(1).strip()
+                qty = item_match.group(2).strip()
+                
+                current_cde = associate_to_order(item_pos, cmd_positions, cmd_starts)
+                        
+                orders_mode3.append({
+                    "Commande": current_cde,
+                    "Ref": ref,
+                    "Qte_Cde": int(qty)
+                })
+                
+            if orders_mode3:
+                st.info(f"✅ Extraction réussie (Mode 3: {len(orders_mode3)} lignes trouvées).")
+                return pd.DataFrame(orders_mode3).drop_duplicates()
+
+        # Si les trois modes échouent
         return pd.DataFrame()
     except Exception as e:
         st.error(f"Erreur fatale de lecture PDF : Une exception s'est produite. Détail: {e}")
@@ -434,7 +455,7 @@ if f_stock:
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                 filename = f"Rapport_Rupture_GESTHOR_{timestamp}.xlsx"
 
-                # VÉRIFIEZ BIEN CETTE LIGNE (ligne 446) : doit être openpyxl
+                # LIGNE CRITIQUE (ligne 450): VEUILLEZ VÉRIFIER QUE C'EST BIEN openpyxl
                 with pd.ExcelWriter(output, engine="openpyxl") as writer: 
                     
                     # Feuille 1: Récapitulatif
