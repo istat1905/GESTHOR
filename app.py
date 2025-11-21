@@ -165,14 +165,13 @@ def extract_pdf_force(pdf_file):
             cmd_positions = {m.start(): m.group(1) for m in cmd_matches}
             cmd_starts = sorted(cmd_positions.keys())
             
-            # --- TENTATIVE 1: MODE CSV QUOTÉ (Très structuré) ---
-            # Objectif: trouver Réf. frn (G1) et Qté commandée (G2)
+            # --- TENTATIVE 1: MODE CSV QUOTÉ (Très structuré, désormais strict sur le compte des champs) ---
             item_pattern_mode1 = re.compile(
-                r'"\d+\n",'                          # Champ 1: Ligne N°
-                r'"(\d{4,7})\n",'                      # Champ 2: Réf. frn (Group 1)
-                r'.*?'                                # Champs 3, 4, 5 (EAN, Carton, Libellé)
-                r'"(\d+)\n",'                         # Champ 6: Qté commandée (Group 2)
-                r'(?:"\d+\n",)?(?:"EUR\n")?',         # Optional: Pcb et Devise
+                r'"\d+\n",'                          # 1. Ligne N°
+                r'"(\d{4,7})\n",'                    # 2. Réf. frn (Group 1)
+                r'(".*?\n",){3}'                     # 3, 4, 5 (EAN, Nb carton, Libellé) - EXACTEMENT trois champs quotés intermédiaires
+                r'"(\d+)\n"',                        # 6. Qté commandée (Group 2)
+                r'(,".*?"){2}',                      # 7 & 8 (Pcb et Devise - ou autres champs restants)
                 re.DOTALL | re.IGNORECASE
             )
             
@@ -190,7 +189,7 @@ def extract_pdf_force(pdf_file):
                 })
 
             if orders:
-                st.info(f"✅ Extraction réussie (Mode 1: {len(orders)} lignes trouvées).")
+                st.info(f"✅ Extraction réussie (Mode 1 - Corrigé: {len(orders)} lignes trouvées).")
                 return pd.DataFrame(orders).drop_duplicates()
 
             # --- TENTATIVE 2: MODE TABLEAU FRAGMENTÉ (Ancrage sur Prix/Pcb) ---
@@ -455,7 +454,7 @@ if f_stock:
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                 filename = f"Rapport_Rupture_GESTHOR_{timestamp}.xlsx"
 
-                # LIGNE CRITIQUE (ligne 450): VEUILLEZ VÉRIFIER QUE C'EST BIEN openpyxl
+                # LIGNE CRITIQUE (ligne 458): VEUILLEZ VÉRIFIER QUE C'EST BIEN openpyxl
                 with pd.ExcelWriter(output, engine="openpyxl") as writer: 
                     
                     # Feuille 1: Récapitulatif
