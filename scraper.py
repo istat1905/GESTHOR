@@ -6,28 +6,30 @@ def get_stock(item_code, username, password):
         context = browser.new_context()
         page = context.new_page()
 
-        # Ouvrir Business Central
+        print("Ouverture de la page BC…")
         page.goto("https://bc.suntat.group/Kardesler/?company=BAK%20Kardesler&dc=0")
 
         # LOGIN
-        page.wait_for_selector("#signInName")
+        page.wait_for_selector("#signInName", timeout=60000)
         page.fill("#signInName", username)
         page.fill("#password", password)
         page.click("#next")
 
-        page.wait_for_timeout(6000)  # attendre le chargement complet
+        print("Connexion effectuée, attente du chargement…")
+        page.wait_for_timeout(8000)
 
         # Aller à Articles
         page.click("xpath=//span[text()='Articles']")
-        page.wait_for_selector("input[aria-label='Rechercher']")
+        page.wait_for_selector("input[aria-label='Rechercher']", timeout=60000)
 
         # Rechercher l'article
         page.fill("input[aria-label='Rechercher']", item_code)
-        page.wait_for_timeout(2000)
+        page.wait_for_timeout(3000)
 
-        # Récupérer le stock (colonne Inventory)
+        # Récupérer le stock
         cell = page.locator("//div[@role='row' and @aria-rowindex='2']//div[@col-id='Inventory']")
-        stock = cell.inner_text()
+        stock = cell.inner_text(timeout=30000)
 
         browser.close()
+        print(f"Stock trouvé : {stock}")
         return stock
