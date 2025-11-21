@@ -16,9 +16,6 @@ st.markdown("""
         background-color: #fff; border: 1px solid #ddd; border-radius: 8px;
         padding: 10px; text-align: center; box-shadow: 0 2px 4px rgba(0,0,0,0.05);
     }
-    /* Taux de service couleurs */
-    .success-kpi { color: #28a745; font-weight: bold; font-size: 1.2rem; }
-    .error-kpi { color: #dc3545; font-weight: bold; font-size: 1.2rem; }
     .footer { text-align: center; margin-top: 4rem; color: #888; font-size: 0.8rem; border-top: 1px solid #eee; padding-top: 1rem;}
     </style>
     """, unsafe_allow_html=True)
@@ -66,7 +63,7 @@ def load_stock(file):
         return None
 
 def extract_pdf_force(pdf_file):
-    """ Lecture Bulletozer, adaptée aux sauts de ligne internes du PDF fourni. """
+    """ Moteur d'extraction Bulldog, ciblant Ref et Qte malgré le format cassé """
     orders = []
     
     try:
@@ -75,38 +72,42 @@ def extract_pdf_force(pdf_file):
             for page in pdf.pages:
                 full_text += page.extract_text() + "\n"
             
-            # --- 1. Extraction des Numéros de Commande ---
-            # Liste des commandes dans le document
+            # 1. Extraction des Numéros de Commande
             cde_nums = re.findall(r"Commande\s*n°(\d+)", full_text)
-            if not cde_nums:
-                 return pd.DataFrame() # Stop si pas de commande trouvée
+            if not cde_nums: return pd.DataFrame()
             
-            # --- 2. Extraction des Lignes de Produits ---
-            # Pattern: "N\n","REF\n",...,"QTY\n","PCB\n","EUR\n"
-            # On cherche: Réf (Groupe 1) et Qté Commandée (Groupe 2)
-            # Le .*? en mode DOTALL permet de sauter les multiples champs et les sauts de ligne internes
-            item_pattern = re.compile(r'"\d+\n","(\d+)\n",.*?"(\d+)\n",".*?","(EUR\n)"', re.DOTALL)
+            # 2. Extraction des Lignes de Produits (FIX CORRIGÉ)
+            # Pattern: "Ligne\n","REF\n",... *Junk* ..., "QTY\n","PCB\n","EUR\n"
+            item_pattern = re.compile(
+                # Commence par le Numéro de Ligne et capture la Réf (Group 1)
+                r'"\d+\n","(\d{4,7})\n"' 
+                # Non-greedy match pour tout ce qui est entre la Réf et la Qté
+                r'.*?' 
+                # Capture la Qté (Group 2), suivie de PCB et EUR pour s'ancrer
+                r',"(\d+)\n","\d+\n","EUR\n"', 
+                re.DOTALL # Permet au point (.) de matcher les sauts de ligne (\n)
+            )
             
             item_matches = item_pattern.finditer(full_text)
             
-            # On utilise les numéros de commande trouvés pour attribuer les lignes
+            # 3. Attribution des lignes de commande aux numéros
             current_cde_index = 0
             
             for match in item_matches:
                 ref = match.group(1).strip()
                 qty = match.group(2).strip()
                 
-                # Attribuer la commande la plus récente ou la suivante
-                if current_cde_index < len(cde_nums):
-                    cde_id = cde_nums[current_cde_index]
-                else:
-                    cde_id = cde_nums[-1] # Si on déborde (plus de lignes que de commandes), on reste sur la dernière
-
-                # HACK : Après la première commande, on passe à la suivante quand la page change ou le Récapitulatif est vu.
-                # Ici, on va simplement basculer d'ID à chaque fois qu'on voit le récapitulatif
-                if "Récapitulatif" in full_text[:match.start()] and cde_id == cde_nums[current_cde_index] and current_cde_index < len(cde_nums) - 1:
-                     current_cde_index += 1
-                     cde_id = cde_nums[current_cde_index]
+                # Bascule sur la commande suivante si on a passé le "Récapitulatif" de la commande actuelle
+                if current_cde_index < len(cde_nums) - 1 and "Récapitulatif" in full_text[:match.start()]:
+                     # On trouve le numéro de commande associé à ce Récapitulatif
+                     # Ici on simplifie en basculant à la prochaine commande disponible
+                     if current_cde_index < len(cde_nums) - 1 and ref == cde_nums[current_cde_index+1]:
+                         # Petite astuce pour éviter le crash
+                         pass
+                     else:
+                        current_cde_index += 1
+                
+                cde_id = cde_nums[min(current_cde_index, len(cde_nums) - 1)]
 
                 orders.append({
                     "Commande": cde_id,
@@ -114,9 +115,9 @@ def extract_pdf_force(pdf_file):
                     "Qte_Cde": int(qty)
                 })
 
-        return pd.DataFrame(orders)
+        return pd.DataFrame(orders).drop_duplicates()
     except Exception as e:
-        st.error(f"Erreur PDF : {e}")
+        st.error(f"Erreur fatale de lecture PDF : {e}")
         return pd.DataFrame()
 
 # --- SIDEBAR ---
@@ -141,13 +142,15 @@ if f_stock:
                 df["Description"].str.contains(search_input, case=False, na=False))
         df = df[mask]
 
-    # --- INDICATEURS DE STOCK (Restaurés) ---
+    # --- INDICATEURS DE STOCK (RÉTABLIS) ---
     st.markdown("### 📊 Indicateurs de Stock")
     
     k1, k2, k3 = st.columns(3)
     k1.metric("Articles trouvés", len(df))
-    k2.metric("❌ En Rupture", len(df[df["Statut"] == "Rupture"]), delta_color="inverse")
-    k3.metric("⚠️ Stock Faible", len(df[df["Statut"] == "Faible"]), delta_color="normal")
+    nb_rupt = len(df[df["Statut"] == "Rupture"])
+    nb_faible = len(df[df["Statut"] == "Faible"])
+    k2.metric("❌ En Rupture", nb_rupt, delta=-nb_rupt, delta_color="inverse")
+    k3.metric("⚠️ Stock Faible", nb_faible, delta_color="normal")
     
     st.divider()
 
@@ -164,8 +167,8 @@ if f_stock:
             st.subheader("Résultat de l'analyse des Commandes")
             df_cde = extract_pdf_force(f_pdf)
             
-            if df_cde.empty:
-                st.warning("⚠️ Aucune commande trouvée. Le format de votre PDF semble très inhabituel, mais le code est optimisé pour votre exemple. Rechargez le PDF ou vérifiez le contenu.")
+            if df_cde.empty or 'Ref' not in df_cde.columns or len(df_cde) < 1:
+                st.warning("⚠️ Aucune ligne de commande exploitable trouvée dans le PDF. Le format reste problématique.")
             else:
                 # Moteur de calcul (Simule l'épuisement du stock)
                 stock_live = df_stock.set_index("N° article.")["Inventory"].to_dict()
@@ -173,7 +176,6 @@ if f_stock:
                 
                 analyse = []
                 
-                # On groupe par commande pour calculer le taux de service
                 for num_cde, data_cde in df_cde.groupby("Commande"):
                     tot_demande, tot_servi = 0, 0
                     lignes_ko = []
@@ -183,10 +185,9 @@ if f_stock:
                         stock_dispo = stock_live.get(ref, 0)
                         
                         tot_demande += qte
-                        
                         servi = min(qte, stock_dispo)
                         tot_servi += servi
-                        stock_live[ref] = max(0, stock_dispo - qte) # Déduction immédiate
+                        stock_live[ref] = max(0, stock_dispo - qte)
                         
                         if servi < qte:
                             manque = qte - servi
@@ -198,11 +199,7 @@ if f_stock:
                             })
                     
                     taux = (tot_servi / tot_demande * 100) if tot_demande > 0 else 0
-                    analyse.append({
-                        "Commande": num_cde, "Taux": taux, 
-                        "Demande": tot_demande, "Servi": tot_servi, 
-                        "Alertes": lignes_ko
-                    })
+                    analyse.append({"Commande": num_cde, "Taux": taux, "Demande": tot_demande, "Servi": tot_servi, "Alertes": lignes_ko})
                 
                 df_ana = pd.DataFrame(analyse)
                 
@@ -227,14 +224,15 @@ if f_stock:
                             st.error(f"🛑 {len(row['Alertes'])} références en rupture sur cette commande :")
                             st.dataframe(pd.DataFrame(row["Alertes"]), hide_index=True)
                         else:
-                            st.success("Commande complète. Stock suffisant pour l'intégralité.")
+                            st.success("Tout est en stock pour cette commande !")
 
     # --- 2. LOGIQUE ONGLETS STOCK ---
     
-    # Index de départ pour les onglets de stock
-    start_idx = 1 if f_pdf else 0
-    
-    def show_tab(filtre, idx):
+    def show_tab(filtre, titre_onglet):
+        # On trouve l'index de l'onglet dans la liste t_noms
+        if titre_onglet not in t_noms: return 
+        idx = t_noms.index(titre_onglet)
+        
         with tabs[idx]:
             if filtre == "Tout":
                 d = df
@@ -251,20 +249,15 @@ if f_stock:
                     hide_index=True,
                     column_config={
                         "Inventory": st.column_config.NumberColumn("Stock (UVC)", format="%d"),
-                        "Stock Colis": st.column_config.NumberColumn("Colis (Est.)", format="%.1f"), # Plus de barre
+                        "Stock Colis": st.column_config.NumberColumn("Colis (Est.)", format="%.1f"),
                     }
                 )
 
     # Appel des onglets de stock
-    if "❌ Ruptures" in t_noms:
-        show_tab("Rupture", t_noms.index("❌ Ruptures"))
-    if "⚠️ Stock Faible" in t_noms:
-        show_tab("Faible", t_noms.index("⚠️ Stock Faible"))
-    if "✅ Stock OK" in t_noms:
-        show_tab("OK", t_noms.index("✅ Stock OK"))
-    if "📁 Tout" in t_noms:
-        show_tab("Tout", t_noms.index("📁 Tout"))
-
+    show_tab("Rupture", "❌ Ruptures")
+    show_tab("Faible", "⚠️ Stock Faible")
+    show_tab("OK", "✅ Stock OK")
+    show_tab("Tout", "📁 Tout")
 
 else:
     st.info("👈 En attente du fichier Stock Excel...")
