@@ -229,14 +229,6 @@ with st.sidebar:
     if st.button("🚪 Déconnexion", use_container_width=True):
         st.session_state.authenticated = False
         st.rerun()
-    st.divider()
-    # --- NOUVEAU BOUTON IMAGE ---
-    # Nous utilisons st.markdown avec la balise <a> pour créer un lien cliquable
-    # contenant votre image 'desathor.png'.
-    st.markdown("""
-        <a href="https://desathor.streamlit.app/" target="_blank" class="external-app-link">
-            <img src="desathor.png" alt="Aller à Desathor App" title="Ouvrir l'application Desathor" />
-        </a>    
     
     st.divider()
     
