@@ -564,4 +564,4 @@ else:
     st.info("👈 Chargez le fichier stock")
 
 if st.session_state.authenticated:
-    st.markdown("""<div class="footer">GESTHOR Pro | 2025 ⭐</div>""", unsafe_allow_html=True)
+    st.markdown("""<div class="footer">Powered by IC | 2025 ⭐⭐⭐⭐⭐ </div>""", unsafe_allow_html=True)
