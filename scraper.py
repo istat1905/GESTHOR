@@ -15,8 +15,7 @@ def get_stock(item_code, username, password):
         page.fill("#password", password)
         page.click("#next")
 
-        # Attendre le chargement complet
-        page.wait_for_timeout(6000)
+        page.wait_for_timeout(6000)  # attendre le chargement complet
 
         # Aller à Articles
         page.click("xpath=//span[text()='Articles']")
