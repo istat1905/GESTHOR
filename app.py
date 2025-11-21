@@ -4,7 +4,6 @@ import numpy as np
 import pdfplumber
 import re
 import io
-import time
 from datetime import datetime
 
 # --- Vérification Plotly pour les graphiques ---
@@ -18,7 +17,7 @@ except ImportError:
 # --- Configuration de la page ---
 st.set_page_config(page_title="GESTHOR – Master", page_icon="📦", layout="wide")
 
-# --- Base de données utilisateurs simulée (À REMPLACER par une BDD réelle) ---
+# --- Base de données utilisateurs simulée ---
 USERS_DB = {
     "admin": {"password": "admin123", "role": "admin"},
     "user1": {"password": "user123", "role": "user"},
@@ -38,11 +37,10 @@ if "username" not in st.session_state:
 if "user_role" not in st.session_state:
     st.session_state.user_role = None
 
-# --- CSS Épuré et Centré ---
+# --- CSS ---
 st.markdown("""
     <style>
     .block-container { padding-top: 1rem; }
-    /* Style KPI */
     div[data-testid="stMetric"] {
         background-color: #fff; border: 1px solid #ddd; border-radius: 8px;
         padding: 10px; text-align: center; box-shadow: 0 2px 4px rgba(0,0,0,0.05);
@@ -68,28 +66,23 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# --- HEADER (Logo Centré) ---
+# --- HEADER ---
 c1, c2, c3 = st.columns([1,1,1])
 with c2:
-    try:
-        # Remplacer par un chemin d'accès si l'image est locale
-        # st.image("Gesthor.png", use_container_width=True) 
-        st.markdown("<h1 style='text-align: center; color: #0072B5;'>GESTHOR</h1>", unsafe_allow_html=True)
-    except:
-        st.markdown("<h1 style='text-align: center; color: #0072B5;'>GESTHOR</h1>", unsafe_allow_html=True)
+    st.markdown("<h1 style='text-align: center; color: #0072B5;'>GESTHOR</h1>", unsafe_allow_html=True)
 
 st.markdown("<h4 style='text-align: center; color: grey; font-weight: normal;'>Gestion de Stock & Analyse de Commandes</h4>", unsafe_allow_html=True)
 
 # --- PAGE DE CONNEXION ---
 if not st.session_state.authenticated:
     st.markdown("---")
-    st.markdown("### 🔐 Connexion requise")
+    st.markdown("### 🔒 Connexion requise")
     
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
         with st.form("login_form"):
             username = st.text_input("👤 Identifiant")
-            password = st.text_input("🔒 Mot de passe", type="password")
+            password = st.text_input("🔑 Mot de passe", type="password")
             submit = st.form_submit_button("Se connecter", use_container_width=True, type="primary")
             
             if submit:
@@ -136,175 +129,113 @@ def load_stock(file):
         st.error(f"Erreur Excel : {e}")
         return None
 
-def associate_to_order(item_pos, cmd_positions, cmd_starts):
-    """ Associe la position de l'article à la commande la plus proche """
-    if not cmd_starts:
-        return "INCONNU"
-        
-    current_cde = cmd_positions[cmd_starts[0]]
-    for start in cmd_starts:
-        if start <= item_pos:
-            current_cde = cmd_positions[start]
-        else:
-            break
-    return current_cde
-
-def extract_pdf_force(pdf_file):
-    """ Moteur d'extraction quadruple mode pour PDF """
+def extract_pdf_improved(pdf_file):
+    """Extraction améliorée pour les PDFs de commandes"""
     orders = []
     
     try:
         with pdfplumber.open(pdf_file) as pdf:
             full_text = ""
             for page in pdf.pages:
-                # Ajout d'une ligne de séparation forte entre les pages
-                full_text += page.extract_text() + "\n---PAGE BREAK---\n"
+                full_text += page.extract_text() + "\n---PAGE---\n"
             
-            # 1. Trouver toutes les commandes et leur position
-            cmd_matches = list(re.finditer(r"Commande\s*n[°º]?\s*[:\s-]*?(\d{5,10})", full_text))
-            if not cmd_matches: 
-                st.warning("❌ Aucune référence de commande trouvée dans le PDF.")
+            # Trouver toutes les commandes
+            cmd_pattern = re.compile(r"Commande\s+n[°º]?\s*(\d{5,10})", re.IGNORECASE)
+            cmd_matches = list(cmd_pattern.finditer(full_text))
+            
+            if not cmd_matches:
+                st.warning("⚠️ Aucune commande trouvée dans le PDF")
                 return pd.DataFrame()
             
-            cmd_positions = {m.start(): m.group(1) for m in cmd_matches}
+            # Créer un dictionnaire de positions de commandes
+            cmd_positions = {}
+            for match in cmd_matches:
+                cmd_num = match.group(1)
+                cmd_positions[match.start()] = cmd_num
+            
             cmd_starts = sorted(cmd_positions.keys())
             
-            # --- NOUVELLE TENTATIVE 4: MODE TABULAIRE SANS PRIX (Format B) ---
-            # Ancrage: L (G1), Réf. frn (G2), EAN (G3), Nb carton (G4), Description, Qté (G5), Pcb (G6), Devise.
-            pattern_mode4_str = (
-                r'"(\d{1,3})\n"'            # Group 1: L (N° de ligne)
-                r',"[^"]*(\d{4,7})\n"'      # Group 2: Réf. frn (4 à 7 chiffres)
-                r',"[^"]*(\d{13})\n"'       # Group 3: Code EAN (13 chiffres)
-                r',"[^"]*(\d+)\n"'          # Group 4: Nb carton
-                r',"[^"]*?"'                # Libellé fournisseur (non capturé)
-                r',"[^"]*(\d{1,5})\n"'      # Group 5: Qté commandée (Ancre forte)
-                r',"[^"]*\d+\n"'            # Pcb (non capturé)
-                r',"[^"]*EUR\n"'            # Devise (Ancrage de fin)
-            )
-            item_pattern_mode4 = re.compile(
-                pattern_mode4_str,
-                re.DOTALL | re.IGNORECASE
+            # PATTERN PRINCIPAL AMÉLIORÉ
+            # Format: L Réf.frn Code EAN Nb carton Libellé Qté Pcb Devise/Prix
+            line_pattern = re.compile(
+                r'^\s*(\d{1,3})\s+'           # Ligne (1-3 chiffres)
+                r'(\d{3,7})\s+'                # Réf fournisseur (3-7 chiffres) 
+                r'(\d{13})\s+'                 # Code EAN (13 chiffres)
+                r'(\d{1,4})\s+'                # Nb cartons
+                r'(.+?)\s+'                    # Libellé (non gourmand)
+                r'(\d{1,5})\s+'                # Qté commandée
+                r'(\d{1,4})\s+'                # Pcb
+                r'(?:EUR|\d+[,\.]\d+)',        # Devise ou Prix
+                re.MULTILINE
             )
             
-            orders_mode4 = []
-            for item_match in item_pattern_mode4.finditer(full_text):
-                item_pos = item_match.start()
-                ref = item_match.group(2).strip() # Réf. frn
-                qty = item_match.group(5).strip() # Qté commandée
-                
-                current_cde = associate_to_order(item_pos, cmd_positions, cmd_starts)
-                        
-                orders_mode4.append({
-                    "Commande": current_cde,
-                    "Ref": ref,
-                    "Qte_Cde": int(qty)
-                })
-
-            if orders_mode4:
-                st.info(f"✅ Extraction réussie (Mode 4 - Format B: {len(orders_mode4)} lignes trouvées).")
-                return pd.DataFrame(orders_mode4).drop_duplicates()
-
-
-            # --- TENTATIVE 1: MODE TABULAIRE MULTI-LIGNE (Format A - Version corrigée) ---
-            # Ancrage: Réf. frn (G1), EAN (G2), Libellé (non capturé), Qté (G3), Pcb, Prix.
-            pattern_mode1_str = (
-                r'\n\s*(\d{4,7})\s+'        # Group 1: Réf. frn (4 à 7 chiffres - Ancrage fort)
-                r'\n\s*\d{1,3}\n\s*'        # N° de ligne (séparé dans le brut)
-                r'(\d{13})\s+'              # Group 2: Code EAN (13 chiffres - Ancrage fort)
-                r'(?:.|\n)*?'               # Libellé fournisseur et Conditionnement multi-lignes (non gourmand)
-                r'([\d]+)\s*'               # Group 3: Qté commandée (1 à 5 chiffres)
-                r',,'                       # Séparateur double virgule (spécifique au Format A)
-                r'(?:.|\n)*?'               # Pcb/Prix (non capturé)
-                r'\d{1,5}[,]\d{1,3}'        # Prix unitaire (e.g., 1,52) - Ancrage de fin
-            )
-            item_pattern_mode1 = re.compile(
-                pattern_mode1_str,
-                re.DOTALL | re.IGNORECASE
-            )
+            # Recherche dans tout le texte
+            for match in line_pattern.finditer(full_text):
+                try:
+                    pos = match.start()
+                    ref = match.group(2).strip()
+                    qty = int(match.group(6).strip())
+                    
+                    # Trouver la commande correspondante
+                    current_cmd = "INCONNU"
+                    for start_pos in cmd_starts:
+                        if start_pos <= pos:
+                            current_cmd = cmd_positions[start_pos]
+                        else:
+                            break
+                    
+                    orders.append({
+                        "Commande": current_cmd,
+                        "Ref": ref,
+                        "Qte_Cde": qty
+                    })
+                except Exception as e:
+                    continue
             
-            for item_match in item_pattern_mode1.finditer(full_text):
-                item_pos = item_match.start()
-                ref = item_match.group(1).strip()
-                qty = item_match.group(3).strip() # CHANGEMENT: La quantité est le 3e groupe
+            # PATTERN ALTERNATIF (sans EAN visible)
+            if len(orders) < 5:  # Si peu de résultats, essayer pattern alternatif
+                alt_pattern = re.compile(
+                    r'^\s*\d{1,3}\s+'          # Numéro ligne
+                    r'(\d{3,7})\s+'            # Réf fournisseur
+                    r'\d{13}\s+'               # EAN
+                    r'.{10,200}?'              # Description variable
+                    r'\s(\d{1,5})\s+'          # Quantité
+                    r'\d{1,4}\s+'              # Pcb
+                    r'(?:EUR|\d+[,\.]\d+)',    # Fin de ligne
+                    re.MULTILINE | re.DOTALL
+                )
                 
-                current_cde = associate_to_order(item_pos, cmd_positions, cmd_starts)
+                for match in alt_pattern.finditer(full_text):
+                    try:
+                        pos = match.start()
+                        ref = match.group(1).strip()
+                        qty = int(match.group(2).strip())
                         
-                orders.append({
-                    "Commande": current_cde,
-                    "Ref": ref,
-                    "Qte_Cde": int(qty)
-                })
-
+                        current_cmd = "INCONNU"
+                        for start_pos in cmd_starts:
+                            if start_pos <= pos:
+                                current_cmd = cmd_positions[start_pos]
+                            else:
+                                break
+                        
+                        orders.append({
+                            "Commande": current_cmd,
+                            "Ref": ref,
+                            "Qte_Cde": qty
+                        })
+                    except:
+                        continue
+            
             if orders:
-                st.info(f"✅ Extraction réussie (Mode 1 - Format A: {len(orders)} lignes trouvées).")
-                return pd.DataFrame(orders).drop_duplicates()
-
-            # --- TENTATIVE 2: MODE FALLBACK (Ancrage sur Prix/Pcb - Simplifié) ---
-            pattern_mode2_str = (
-                r'\n\s*\d+\s+'          # Début d'une ligne d'article (ex: "\n 1 ")
-                r'(\d{4,7})\s+'         # Group 1: Réf. frn (e.g., 118500)
-                r'.*?'                  # Match non gourmand pour Description/Cond.
-                r'(\d+)\s+'             # Group 2: Qté commandée
-                r'\d+\s+'               # Pcb
-                r'\d+,\d+'              # Prix (ancrage)
-            )
-            item_pattern_mode2 = re.compile(
-                pattern_mode2_str, 
-                re.DOTALL
-            )
-            
-            orders_mode2 = []
-            for item_match in item_pattern_mode2.finditer(full_text):
-                item_pos = item_match.start()
-                ref = item_match.group(1).strip()
-                qty = item_match.group(2).strip()
+                df_orders = pd.DataFrame(orders).drop_duplicates()
+                st.success(f"✅ {len(df_orders)} lignes extraites de {len(cmd_matches)} commande(s)")
+                return df_orders
+            else:
+                st.error("❌ Aucune ligne de commande extraite. Vérifiez le format du PDF.")
+                return pd.DataFrame()
                 
-                current_cde = associate_to_order(item_pos, cmd_positions, cmd_starts)
-                        
-                orders_mode2.append({
-                    "Commande": current_cde,
-                    "Ref": ref,
-                    "Qte_Cde": int(qty)
-                })
-
-            if orders_mode2:
-                st.info(f"✅ Extraction réussie (Mode 2: {len(orders_mode2)} lignes trouvées).")
-                return pd.DataFrame(orders_mode2).drop_duplicates()
-
-            # --- TENTATIVE 3: MODE ULTRA-FALLBACK (Ancrage minimal) ---
-            pattern_mode3_str = (
-                r'\n\s*\d{1,3}\s+'          # Ligne N° (1 à 3 chiffres)
-                r'(\d{4,7})\s+'             # Group 1: Réf. frn (4 à 7 chiffres) suivi d'un espace
-                r'.{1,250}?'                # Description/Autres champs (1 à 250 caractères max)
-                r'(\d{1,5})\s*[\n\r]'       # Group 2: Qté commandée (1 à 5 chiffres) avant un retour à la ligne
-            )
-            item_pattern_mode3 = re.compile(
-                pattern_mode3_str, 
-                re.DOTALL
-            )
-            
-            orders_mode3 = []
-            for item_match in item_pattern_mode3.finditer(full_text):
-                item_pos = item_match.start()
-                ref = item_match.group(1).strip()
-                qty = item_match.group(2).strip()
-                
-                current_cde = associate_to_order(item_pos, cmd_positions, cmd_starts)
-                        
-                orders_mode3.append({
-                    "Commande": current_cde,
-                    "Ref": ref,
-                    "Qte_Cde": int(qty)
-                })
-                
-            if orders_mode3:
-                st.info(f"✅ Extraction réussie (Mode 3: {len(orders_mode3)} lignes trouvées).")
-                return pd.DataFrame(orders_mode3).drop_duplicates()
-
-        # Si les trois modes échouent
-        return pd.DataFrame()
     except Exception as e:
-        st.error(f"Erreur fatale de lecture PDF : Une exception s'est produite. Détail: {e}")
+        st.error(f"Erreur lors de la lecture du PDF : {str(e)}")
         return pd.DataFrame()
 
 # --- SIDEBAR ---
@@ -334,14 +265,14 @@ with st.sidebar:
 if f_stock:
     df_stock = load_stock(f_stock)
     
-    # --- FILTRE RECHERCHE GLOBAL ---
+    # Filtre recherche
     df = df_stock.copy()
     if search_input:
         mask = (df["N° article."].str.contains(search_input, case=False, na=False) | 
                 df["Description"].str.contains(search_input, case=False, na=False))
         df = df[mask]
 
-    # --- INDICATEURS DE STOCK ---
+    # Indicateurs de stock
     st.markdown("### 📊 Indicateurs de Stock")
     
     k1, k2, k3 = st.columns(3)
@@ -353,35 +284,32 @@ if f_stock:
     
     st.divider()
 
-    # --- CRÉATION DES ONGLETS ---
+    # Création des onglets
     t_noms = []
     if f_pdf: t_noms.append("🚀 Analyse Commandes")
-    t_noms.extend(["❌ Ruptures", "⚠️ Stock Faible", "✅ Stock OK", "📁 Tout"])
+    t_noms.extend(["❌ Ruptures", "⚠️ Stock Faible", "✅ Stock OK", "📋 Tout"])
     
     tabs = st.tabs(t_noms)
     
-    # --- 1. LOGIQUE ANALYSE COMMANDES (Si PDF) ---
+    # ANALYSE COMMANDES
     if f_pdf:
         with tabs[t_noms.index("🚀 Analyse Commandes")]:
             st.subheader("Résultat de l'analyse des Commandes")
-            df_cde = extract_pdf_force(f_pdf)
+            df_cde = extract_pdf_improved(f_pdf)
             
-            if df_cde.empty or 'Ref' not in df_cde.columns or len(df_cde) < 1:
-                st.warning("⚠️ Aucune ligne de commande exploitable trouvée dans le PDF. Veuillez vérifier que le fichier est bien un PDF texte.")
+            if df_cde.empty or 'Ref' not in df_cde.columns:
+                st.warning("⚠️ Aucune donnée exploitable")
             else:
-                # Moteur de calcul (Simule l'épuisement du stock)
+                # Simulation stock
                 stock_live = df_stock.set_index("N° article.")["Inventory"].to_dict()
                 desc_live = df_stock.set_index("N° article.")["Description"].to_dict()
                 
                 analyse = []
-                all_ruptures = [] # Pour le rapport Excel
+                all_ruptures = []
                 
                 for num_cde, data_cde in df_cde.groupby("Commande"):
                     tot_demande, tot_servi = 0, 0
                     lignes_ko = []
-                    
-                    # Tri des lignes pour un traitement prévisible
-                    data_cde = data_cde.sort_values("Ref") 
                     
                     for _, row in data_cde.iterrows():
                         ref, qte = row["Ref"], row["Qte_Cde"]
@@ -391,15 +319,14 @@ if f_stock:
                         servi = min(qte, stock_dispo)
                         tot_servi += servi
                         
-                        # Déduction immédiate du stock
-                        stock_live[ref] = max(0, stock_dispo - servi) 
+                        stock_live[ref] = max(0, stock_dispo - servi)
                         
                         if servi < qte:
                             manque = qte - servi
                             rupture_data = {
                                 "Commande": num_cde,
                                 "Ref": ref,
-                                "Article": desc_live.get(ref, f"Article {ref} (Non trouvé en stock)"),
+                                "Article": desc_live.get(ref, f"Article {ref}"),
                                 "Commandé": qte,
                                 "Servi": servi,
                                 "Manquant": manque
@@ -408,12 +335,18 @@ if f_stock:
                             all_ruptures.append(rupture_data)
                     
                     taux = (tot_servi / tot_demande * 100) if tot_demande > 0 else 0
-                    analyse.append({"Commande": num_cde, "Taux": taux, "Demande": tot_demande, "Servi": tot_servi, "Alertes": lignes_ko})
+                    analyse.append({
+                        "Commande": num_cde,
+                        "Taux": taux,
+                        "Demande": tot_demande,
+                        "Servi": tot_servi,
+                        "Alertes": lignes_ko
+                    })
                 
                 df_ana = pd.DataFrame(analyse)
                 df_all_ruptures = pd.DataFrame(all_ruptures)
                 
-                # --- INDICATEURS ANALYSE PDF ---
+                # KPIs
                 tot_demande_g = df_ana["Demande"].sum()
                 tot_servi_g = df_ana["Servi"].sum()
                 taux_global = (tot_servi_g / tot_demande_g * 100) if tot_demande_g > 0 else 0
@@ -428,8 +361,9 @@ if f_stock:
                     </div>
                     """, unsafe_allow_html=True)
                 with col_kpi_2:
+                    color = '#11998e' if taux_global == 100 else '#ffaf00' if taux_global > 90 else '#f5576c'
                     st.markdown(f"""
-                    <div class="kpi-card" style="background: linear-gradient(135deg, {'#11998e' if taux_global == 100 else '#ffaf00' if taux_global > 90 else '#f5576c'} 0%, {'#38ef7d' if taux_global == 100 else '#f5576c' if taux_global < 90 else '#ffdd6e'} 100%);">
+                    <div class="kpi-card" style="background: linear-gradient(135deg, {color} 0%, {color} 100%);">
                         <div class="kpi-label">Taux de Service Global</div>
                         <div class="kpi-value">{taux_global:.1f}%</div>
                     </div>
@@ -444,11 +378,10 @@ if f_stock:
                 
                 st.markdown("---")
                 
-                # --- GRAPHIQUE TAUX DE SERVICE ---
+                # Graphique
                 if PLOTLY_AVAILABLE:
                     st.markdown("### 📈 Performance par commande")
-                    # Triez par Taux pour afficher les plus problématiques en premier
-                    df_ana_sorted = df_ana.sort_values("Taux", ascending=True) 
+                    df_ana_sorted = df_ana.sort_values("Taux", ascending=True)
 
                     fig_service = go.Figure(data=[
                         go.Bar(
@@ -466,92 +399,72 @@ if f_stock:
                         )
                     ])
                     fig_service.update_layout(
-                        title='Taux de service par commande analysée',
+                        title='Taux de service par commande',
                         xaxis_title='N° Commande',
-                        yaxis_title='Taux de service (%)',
+                        yaxis_title='Taux (%)',
                         yaxis_range=[0, 110],
                         showlegend=False,
                         xaxis=dict(type='category')
                     )
                     st.plotly_chart(fig_service, use_container_width=True)
-                    
                     st.markdown("---")
                 
-                # Affichage détaillé par commande
-                st.markdown("### 📋 Détail des commandes en rupture")
+                # Détail commandes
+                st.markdown("### 📋 Détail des commandes")
                 for idx, row in df_ana.sort_values("Taux", ascending=True).iterrows():
-                    titre = f"Commande {row['Commande']} — Taux: {row['Taux']:.1f}% ({int(row['Servi'])}/{int(row['Demande'])})"
+                    titre = f"Commande {row['Commande']} – Taux: {row['Taux']:.1f}% ({int(row['Servi'])}/{int(row['Demande'])})"
                     icon = "✅" if row["Taux"] == 100 else "⚠️" if row["Taux"] >= 95 else "❌"
                     
                     with st.expander(f"{icon} {titre}"):
                         if row["Alertes"]:
-                            st.error(f"🛑 {len(row['Alertes'])} références en rupture sur cette commande :")
+                            st.error(f"🛑 {len(row['Alertes'])} références en rupture :")
                             df_alert = pd.DataFrame(row["Alertes"])
                             st.dataframe(
-                                df_alert[["Ref", "Article", "Commandé", "Servi", "Manquant"]], 
+                                df_alert[["Ref", "Article", "Commandé", "Servi", "Manquant"]],
                                 hide_index=True,
-                                column_config={
-                                    "Commandé": st.column_config.NumberColumn(format="%d"),
-                                    "Servi": st.column_config.NumberColumn(format="%d"),
-                                    "Manquant": st.column_config.NumberColumn(format="%d"),
-                                }
+                                use_container_width=True
                             )
                         else:
-                            st.success("Tout est en stock pour cette commande !")
+                            st.success("Tout est en stock !")
                             
                 st.markdown("---")
-                st.markdown("### 📥 Export du Rapport d'Analyse")
+                st.markdown("### 📥 Export")
                 
-                # --- Export au format Excel ---
+                # Export Excel
                 output = io.BytesIO()
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                filename = f"Rapport_Rupture_GESTHOR_{timestamp}.xlsx"
+                filename = f"Rapport_GESTHOR_{timestamp}.xlsx"
 
-                # VEUILLEZ VÉRIFIER QUE LE MOTEUR 'openpyxl' EST UTILISÉ
-                with pd.ExcelWriter(output, engine="openpyxl") as writer: 
-                    
-                    # Feuille 1: Récapitulatif
-                    df_summary = df_ana[["Commande", "Taux", "Demande", "Servi"]].rename(
-                        columns={"Demande": "Qté Commandée", "Servi": "Qté Livrable"}
-                    )
-                    df_summary["Qté Manquante"] = df_summary["Qté Commandée"] - df_summary["Qté Livrable"]
+                with pd.ExcelWriter(output, engine="openpyxl") as writer:
+                    df_summary = df_ana[["Commande", "Taux", "Demande", "Servi"]].copy()
+                    df_summary["Qté Manquante"] = df_summary["Demande"] - df_summary["Servi"]
                     df_summary["Taux"] = df_summary["Taux"].round(1)
                     df_summary.to_excel(writer, sheet_name="Récapitulatif", index=False)
                     
-                    # Feuille 2: Détail des ruptures
                     if not df_all_ruptures.empty:
                         df_all_ruptures.to_excel(writer, sheet_name="Détail_Ruptures", index=False)
-                    else:
-                        pd.DataFrame([{"Message": "Aucune rupture constatée."}]).to_excel(writer, sheet_name="Détail_Ruptures", index=False)
-
 
                 st.download_button(
-                    "📥 Télécharger le Rapport de Rupture Excel",
+                    "📥 Télécharger Rapport Excel",
                     data=output.getvalue(),
                     file_name=filename,
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     use_container_width=True
                 )
                 
-                # --- Export des données brutes de la commande (utile pour le débogage) ---
-                @st.cache_data
-                def convert_df_to_csv(df):
-                    return df.to_csv(index=False).encode('utf-8')
-                    
-                csv_cde = convert_df_to_csv(df_cde)
+                # Export CSV
+                csv_cde = df_cde.to_csv(index=False).encode('utf-8')
                 st.download_button(
-                    "💾 Télécharger les lignes extraites du PDF (CSV)",
+                    "💾 Télécharger données CSV",
                     csv_cde,
-                    f"Commandes_extraites_{timestamp}.csv",
-                    "text/csv",
-                    key='download-csv'
+                    f"Commandes_{timestamp}.csv",
+                    "text/csv"
                 )
 
-
-    # --- 2. LOGIQUE ONGLETS STOCK ---
-    
+    # Onglets stock
     def show_tab(filtre, titre_onglet):
-        if titre_onglet not in t_noms: return 
+        if titre_onglet not in t_noms:
+            return
         idx = t_noms.index(titre_onglet)
         
         with tabs[idx]:
@@ -561,28 +474,25 @@ if f_stock:
                 d = df[df["Statut"] == filtre]
             
             if d.empty:
-                st.info("Rien à afficher ici avec les filtres actuels.")
+                st.info("Rien à afficher")
             else:
-                top_n = st.slider(f"Nombre de lignes à afficher ({filtre})", 5, 100, 20, key=f"s_{idx}")
+                top_n = st.slider(f"Lignes à afficher", 5, 100, 20, key=f"s_{idx}")
                 st.dataframe(
-                    d.sort_values("Inventory", ascending=(filtre!="OK")).head(top_n)[["N° article.", "Description", "Inventory", "Stock Colis", "Statut"]],
+                    d.sort_values("Inventory", ascending=(filtre!="OK")).head(top_n)[
+                        ["N° article.", "Description", "Inventory", "Stock Colis", "Statut"]
+                    ],
                     use_container_width=True,
-                    hide_index=True,
-                    column_config={
-                        "Inventory": st.column_config.NumberColumn("Stock (UVC)", format="%d"),
-                        "Stock Colis": st.column_config.NumberColumn("Colis (Est.)", format="%.1f"),
-                    }
+                    hide_index=True
                 )
 
-    # Appel des onglets de stock
     show_tab("Rupture", "❌ Ruptures")
     show_tab("Faible", "⚠️ Stock Faible")
     show_tab("OK", "✅ Stock OK")
-    show_tab("Tout", "📁 Tout")
+    show_tab("Tout", "📋 Tout")
 
 else:
-    st.info("👈 En attente du fichier Stock Excel et de votre connexion...")
+    st.info("👈 Veuillez charger le fichier Stock Excel")
 
-# --- FOOTER ---
+# Footer
 if st.session_state.authenticated:
-    st.markdown("""<div class="footer">GESTHOR | Powered by IC - 2025 ★★★★★</div>""", unsafe_allow_html=True)
+    st.markdown("""<div class="footer">GESTHOR | Powered by IC - 2025</div>""", unsafe_allow_html=True)
