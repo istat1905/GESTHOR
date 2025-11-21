@@ -1,10 +1,10 @@
 import requests
 import streamlit as st
 
-st.title("GESTHOR – Vérification Stock")
-
+st.title("GESTHOR – Vérification Stock Locale")
 st.write("Entrez un code article pour récupérer le stock depuis Business Central.")
 
+# Formulaire utilisateur
 username = st.text_input("Utilisateur BC")
 password = st.text_input("Mot de passe BC", type="password")
 item_code = st.text_input("Code article")
@@ -13,6 +13,7 @@ if st.button("Vérifier le stock"):
     if not (username and password and item_code):
         st.error("Merci de remplir tous les champs.")
     else:
+        # URL API OData interne
         url = f"http://demaxbc202.suntat.group:7088/Kardesler/ODataV4/Company('BAK%20Kardesler')/EDF_Item_Card?$filter=No eq '{item_code}'"
         try:
             response = requests.get(url, auth=(username, password))
