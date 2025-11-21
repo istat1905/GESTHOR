@@ -137,7 +137,7 @@ def load_stock(file):
         return None
 
 def extract_pdf_force(pdf_file):
-    """ Moteur d'extraction Bulldog, adapté à un format fragmenté PDF """
+    """ Moteur d'extraction double mode pour PDF (CSV entre guillemets ou Tableau fragmenté) """
     orders = []
     
     try:
@@ -153,39 +153,73 @@ def extract_pdf_force(pdf_file):
             cmd_positions = {m.start(): m.group(1) for m in cmd_matches}
             cmd_starts = sorted(cmd_positions.keys())
             
-            # 2. Pattern pour les lignes de produit (ADAPTÉ au format fragmenté)
-            # Nous ciblons: [Ligne N°] [Réf. frn] + ... + saut de ligne + [Qté commandée] [Pcb] [Prix]
-            # Réf. frn: Group 1
-            # Qté commandée: Group 2
-            item_pattern = re.compile(
-                r'\n\s*\d+\s+'          # Début d'une ligne d'article (ex: "\n 1 ")
-                r'(\d{4,7})\s+'         # Group 1: Réf. frn (ex: 118500)
-                r'.*?'                  # Match non gourmand pour tout ce qui est entre (EAN, Description, Cond.)
-                r'\n\s*(\d+)\s+'        # Group 2: Qté commandée (Le premier nombre après un saut de ligne)
-                r'\d+\s+'               # Pcb (ex: 12)
-                r'\d+,\d+'              # Prix (ex: 2,504)
-                , re.DOTALL # Indispensable pour matcher à travers les sauts de ligne
+            # --- MODE 1: Format Quoted CSV (le plus structuré) ---
+            item_pattern_mode1 = re.compile(
+                r'"\d+\n",'                          # Ligne N°
+                r'"(\d{4,7})\n",'                      # Group 1: Réf. frn (Article N°)
+                r'.*?'                                # Désordre intermédiaire
+                r'"(\d+)\n",'                         # Group 2: Qté commandée
+                r'"\d+\n","EUR\n"',                   # Ancrage (Pcb et Devise)
+                re.DOTALL | re.IGNORECASE
             )
             
-            # 3. Traiter chaque ligne de produit et l'associer à la commande
-            for item_match in item_pattern.finditer(full_text):
+            # --- Tenter Mode 1 ---
+            for item_match in item_pattern_mode1.finditer(full_text):
                 item_pos = item_match.start()
                 ref = item_match.group(1).strip()
                 qty = item_match.group(2).strip()
                 
-                # Déterminer la commande associée (la dernière Commande n° vue avant cette ligne)
+                # Déterminer la commande associée
                 current_cde = cmd_positions[cmd_starts[0]]
                 for start in cmd_starts:
                     if start <= item_pos:
                         current_cde = cmd_positions[start]
                     else:
-                        break # Prochaine commande est après la ligne
+                        break
                         
                 orders.append({
                     "Commande": current_cde,
                     "Ref": ref,
                     "Qte_Cde": int(qty)
                 })
+
+            if orders:
+                st.success(f"✅ Succès de l'extraction (Mode 1: {len(orders)} lignes trouvées).")
+                return pd.DataFrame(orders).drop_duplicates()
+
+            # --- MODE 2: Format Tableau Fragmenté (Fallback pour les formats plus bruts) ---
+            item_pattern_mode2 = re.compile(
+                r'\n\s*\d+\s+'          # Début d'une ligne d'article (ex: "\n 1 ")
+                r'(\d{4,7})\s+'         # Group 1: Réf. frn
+                r'.*?'                  # Match non gourmand pour tout ce qui est entre
+                r'\n\s*(\d+)\s+'        # Group 2: Qté commandée
+                r'\d+\s+'               # Pcb
+                r'\d+,\d+'              # Prix
+                , re.DOTALL 
+            )
+
+            # --- Tenter Mode 2 ---
+            for item_match in item_pattern_mode2.finditer(full_text):
+                item_pos = item_match.start()
+                ref = item_match.group(1).strip()
+                qty = item_match.group(2).strip()
+                
+                # Déterminer la commande associée
+                current_cde = cmd_positions[cmd_starts[0]]
+                for start in cmd_starts:
+                    if start <= item_pos:
+                        current_cde = cmd_positions[start]
+                    else:
+                        break
+                        
+                orders.append({
+                    "Commande": current_cde,
+                    "Ref": ref,
+                    "Qte_Cde": int(qty)
+                })
+
+            if orders:
+                st.success(f"✅ Succès de l'extraction (Mode 2: {len(orders)} lignes trouvées).")
 
         return pd.DataFrame(orders).drop_duplicates()
     except Exception as e:
@@ -359,6 +393,10 @@ if f_stock:
                         xaxis=dict(type='category')
                     )
                     st.plotly_chart(fig_service, use_container_width=True)
+                    
+
+[Image of inventory dashboard charts]
+
                     
                     st.markdown("---")
                 
