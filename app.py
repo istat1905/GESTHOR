@@ -1,30 +1,27 @@
-import requests
 import streamlit as st
+import pandas as pd
 
-st.title("GESTHOR – Vérification Stock Locale")
-st.write("Entrez un code article pour récupérer le stock depuis Business Central.")
+st.title("GESTHOR – Gestion de stock depuis Excel")
+st.write("Importez votre fichier Excel contenant vos articles et stock.")
 
-# Formulaire utilisateur
-username = st.text_input("Utilisateur BC")
-password = st.text_input("Mot de passe BC", type="password")
-item_code = st.text_input("Code article")
+# Upload fichier Excel
+uploaded_file = st.file_uploader("Choisir un fichier Excel", type=["xlsx"])
 
-if st.button("Vérifier le stock"):
-    if not (username and password and item_code):
-        st.error("Merci de remplir tous les champs.")
-    else:
-        # URL API OData interne
-        url = f"http://demaxbc202.suntat.group:7088/Kardesler/ODataV4/Company('BAK%20Kardesler')/EDF_Item_Card?$filter=No eq '{item_code}'"
-        try:
-            response = requests.get(url, auth=(username, password))
-            if response.status_code == 200:
-                data = response.json()
-                if data['value']:
-                    stock = data['value'][0].get('Inventory', 'Non disponible')
-                    st.success(f"Stock disponible : {stock}")
-                else:
-                    st.warning("Article non trouvé.")
-            else:
-                st.error(f"Erreur API : {response.status_code} - {response.text}")
-        except Exception as e:
-            st.error(f"Erreur lors de la connexion à l'API : {e}")
+if uploaded_file is not None:
+    # Lire le fichier Excel
+    try:
+        df = pd.read_excel(uploaded_file)
+        st.subheader("Aperçu des données importées")
+        st.dataframe(df.head())
+
+        # Vérifier que les colonnes nécessaires existent
+        if "Inventory" in df.columns and "Qty. per Sales Unit of Measure" in df.columns:
+            # Calcul stock en colis
+            df["Stock en colis"] = df["Inventory"] / df["Qty. per Sales Unit of Measure"]
+
+            st.subheader("Stock calculé en colis")
+            st.dataframe(df[["No", "Inventory", "Qty. per Sales Unit of Measure", "Stock en colis"]])
+        else:
+            st.error("Le fichier Excel doit contenir les colonnes 'Inventory' et 'Qty. per Sales Unit of Measure'.")
+    except Exception as e:
+        st.error(f"Erreur lors de la lecture du fichier Excel : {e}")
