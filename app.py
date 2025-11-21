@@ -37,18 +37,14 @@ st.markdown("""
     """, unsafe_allow_html=True)
 
 # --- EN-TÊTE AVEC LOGO ---
-# On utilise des colonnes pour centrer le logo
 col_logo1, col_logo2, col_logo3 = st.columns([1, 2, 1])
 
 with col_logo2:
-    # Affiche l'image. "width" ajuste la taille (en pixels).
-    # Si le fichier est dans un dossier, mettez "images/Gesthor.png"
     try:
+        # Assurez-vous que le fichier s'appelle exactement "Gesthor.png" sur GitHub
         st.image("Gesthor.png", width=350) 
     except:
-        # Fallback au cas où l'image n'est pas trouvée ou nom incorrect
-        st.error("Image 'Gesthor.png' introuvable. Vérifiez le nom du fichier sur GitHub.")
-        st.title("GESTHOR")
+        st.markdown("<h1 style='text-align: center; color: #0072B5;'>GESTHOR</h1>", unsafe_allow_html=True)
 
 st.markdown("<h3 style='text-align: center; color: grey;'>📦 Tableau de bord de gestion de stock</h3>", unsafe_allow_html=True)
 st.markdown("---")
@@ -58,7 +54,6 @@ st.markdown("---")
 def load_data(file):
     try:
         data = pd.read_excel(file)
-        # Conversion en string pour éviter les bugs
         if "N° article." in data.columns:
             data["N° article."] = data["N° article."].astype(str)
         if "Description" in data.columns:
@@ -73,10 +68,8 @@ def load_data(file):
 
 # --- Sidebar ---
 with st.sidebar:
-    # Petit logo aussi dans la sidebar si vous voulez
-    # st.image("Gesthor.png", width=100) 
     st.header("GESTHOR")
-    st.caption("Version: v4.0 (Logo)")
+    st.caption("Version: v5.0 (Stable)")
     st.divider()
     
     st.header("📂 Fichier")
@@ -141,14 +134,15 @@ if uploaded_file is not None:
 
             st.divider()
 
-            # 4. Graphiques NATIFS
+            # 4. Graphiques NATIFS (Correction ici : suppression de l'argument color)
             col_g1, col_g2 = st.columns(2)
             
             with col_g1:
-                st.subheader("Répartition")
+                st.subheader("Répartition des statuts")
                 if not df.empty:
                     status_counts = df["Statut"].value_counts()
-                    st.bar_chart(status_counts, color=["#ff4b4b", "#ffa421", "#21c354"])
+                    # On laisse Streamlit choisir la couleur pour éviter le crash
+                    st.bar_chart(status_counts) 
                 else:
                     st.info("Aucune donnée.")
 
@@ -179,10 +173,9 @@ if uploaded_file is not None:
             )
 
 else:
-    # Écran d'accueil
     col_center1, col_center2, col_center3 = st.columns([1, 2, 1])
     with col_center2:
-        st.info("👈 Veuillez charger un fichier Excel dans le menu latéral pour commencer.")
+        st.info("👈 Veuillez charger un fichier Excel dans le menu latéral.")
 
 # --- PIED DE PAGE ---
 st.markdown("""
