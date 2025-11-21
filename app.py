@@ -16,7 +16,7 @@ except ImportError:
     PLOTLY_AVAILABLE = False
 
 # --- Configuration ---
-st.set_page_config(page_title="GESTHOR Pro", page_icon="📦", layout="wide")
+st.set_page_config(page_title="GESTHOR", page_icon="📦", layout="wide")
 
 # --- Fichier de sauvegarde ---
 HISTORY_FILE = "gesthor_history.json"
@@ -64,8 +64,14 @@ st.markdown("""
     """, unsafe_allow_html=True)
 
 # --- HEADER ---
-st.markdown("<h1 style='text-align: center; color: #0072B5;'>📦 GESTHOR PRO</h1>", unsafe_allow_html=True)
-st.markdown("<h4 style='text-align: center; color: grey; font-weight: normal;'>Gestion Intelligente de Stock & Commandes</h4>", unsafe_allow_html=True)
+c1, c2, c3 = st.columns([1,1,1])
+with c2:
+    try:
+        st.image("Gesthor.png", use_container_width=True)
+    except:
+        st.markdown("<h1 style='text-align: center; color: #0072B5;'>GESTHOR</h1>", unsafe_allow_html=True)
+
+st.markdown("<h4 style='text-align: center; color: grey; font-weight: normal;'>Gestion de Stock & Analyse de Commandes</h4>", unsafe_allow_html=True)
 
 # --- CONNEXION ---
 if not st.session_state.authenticated:
